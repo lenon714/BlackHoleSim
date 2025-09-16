@@ -1,0 +1,5 @@
+﻿  main.cpp
+C:\Users\lenon\Documents\GitHub\BlackHoleSim\BlackHoleSim\main.cpp(193,18): warning C4244: 'initializing': conversion from 'double' to 'float', possible loss of data
+  BlackHoleSim.vcxproj -> C:\Users\lenon\Documents\GitHub\BlackHoleSim\x64\Debug\BlackHoleSim.exe
+  'pwsh.exe' is not recognized as an internal or external command,
+  operable program or batch file.
