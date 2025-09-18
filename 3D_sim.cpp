@@ -1,4 +1,5 @@
-﻿#include <GLFW/glfw3.h>
+#include <GL/glew.h>
+#include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -21,16 +22,17 @@ using namespace glm;
 using namespace std;
 using Clock = std::chrono::high_resolution_clock;
 
-double G = 6.67e-11;
-double c = 3.00e8;
+const double G = 6.67e-11;
+const double c = 299792458.0;
+const double EPSILON = 1e-10;
 
 struct Ray;
-void rk4step(Ray& ray, double rad_s, double dl);
+void rk4step(Ray& ray, double rad_s, double dl, vec4 trig_funcs);
 
 struct Engine {
     GLFWwindow* window;
-    int HEIGHT = 600;
-    int WIDTH = 800;
+    int HEIGHT = 750;
+    int WIDTH = 1000;
     double width = 1e11;
     double height = 7.5e10;
 
@@ -63,6 +65,46 @@ struct Engine {
         glMatrixMode(GL_MODELVIEW);
         glLoadIdentity();
     }
+
+    std::string loadShaderSource(const char* filepath) {
+        std::ifstream file(filepath);
+        if (!file.is_open()) {
+            std::cerr << "Failed to open shader file: " << filepath << std::endl;
+            return "";
+        }
+
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        return buffer.str();
+    }
+
+    void createBuffers() {
+        // Load your compute shader file
+        std::string computeSource = loadShaderSource("geodesic.comp");
+        const char* source = computeSource.c_str();
+
+        // Create and compile the compute shader
+        GLuint computeShader = glCreateShader(GL_COMPUTE_SHADER);
+        glShaderSource(computeShader, 1, &source, NULL);
+        glCompileShader(computeShader);
+
+        // Create and bind buffers
+        GLuint RayBuffer, ScreenBuffer;
+        glGenBuffers(1, &RayBuffer);
+        glGenBuffers(1, &ScreenBuffer);
+
+        // Bind buffers to shader binding points
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, RayBuffer);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, ScreenBuffer);
+
+        // Dispatch compute shader
+		int workGroupsX = (WIDTH + 15) / 16;
+		int workGroupsY = (HEIGHT + 15) / 16;
+		int workGroupsZ = 1;
+        glUseProgram(computeShader);
+        glDispatchCompute(workGroupsX, workGroupsY, workGroupsZ);
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    }
 };
 
 Engine engine;
@@ -72,7 +114,7 @@ struct BlackHole {
     double m;
     double rad_s;
 
-    BlackHole(vec2 position, double mass) : pos(position), m(mass) {
+    BlackHole(vec3 position, double mass) : pos(position), m(mass) {
         rad_s = (2.0 * G * mass) / (c * c);
 
         std::cout << "\n=== BLACK HOLE DEBUG INFO ===" << std::endl;
@@ -105,30 +147,31 @@ struct BlackHole {
     }
 };
 
-BlackHole blackhole1(vec2(0, 0), 8.0e36);
+BlackHole blackhole1(vec3(0, 0, 0), 8.0e36);
 
 struct Ray {
     // Cartesian Coordinates
-    double x; double y;
+    double x; double y; double z;
     // Polar Coordinates
-    double r; double phi;
-    double dr; double dphi;
+    double r; double phi; double theta;
+	double dr; double dphi; double dtheta;
 
     vector<vec2> trail;
     double E, L;
 
-    Ray(vec2 position, vec2 dir) : x(position.x), y(position.y), r(sqrt(position.x* position.x + position.y * position.y)), 
-        phi(atan2(position.y, position.x)), dr(dir.x), dphi(dir.y) {
-        r = hypot(x, y);
-        phi = atan(y, x);
-        dr = dir.x * cos(phi) + dir.y * sin(phi);
-        dphi = (-dir.x * sin(phi) + dir.y * cos(phi)) / r;
+    Ray(vec3 position, vec3 dir) : x(position.x), y(position.y), z(position.z) {
+        r = sqrt(x * x + y * y + z * z);
+        phi = atan2(y, x);
+        theta = acos(z / r);
+        dr = dir.x * sin(theta) * cos(phi) + dir.y * sin(theta) * sin(phi) + cos(theta) * dir.z;
+        dphi = (dir.x * -sin(phi) + dir.y * sin(phi)) / (r * sin(theta));
+        dtheta = (dir.x * cos(theta) * cos(phi) + dir.y * cos(theta) * sin(phi) - sin(theta) * dir.z) / r;
 
-        L = r * r * dphi;
+        L = r * r * sin(theta) * dphi;
         double f = 1.0 - blackhole1.rad_s / r;
-        double dt_dl = sqrt((dr * dr) / (f * f) + (r * r * dphi * dphi) / f);
+        double dt_dL = sqrt((dr * dr) / f + r * r * dtheta * dtheta + sin(theta) * sin(theta) * dphi * dphi);
+        E = f * dt_dL;
 
-        E = f * dt_dl;
         trail.push_back({ x,y });
     }
 
@@ -156,63 +199,37 @@ struct Ray {
     }
 
     void step(BlackHole blackhole, double dl) {
-        if (r < blackhole.rad_s) return;
+        if (r <= blackhole.rad_s) return;
 
-		rk4step(*this, blackhole.rad_s, dl);
+        double sin_theta = sin(theta);
+        double cos_theta = cos(theta);
+        double sin_phi = sin(phi);
+        double cos_phi = cos(phi);
 
-        x = cos(phi) * r;
-        y = sin(phi) * r;
+		if (abs(sin_theta) < EPSILON) sin_theta = 0;
+		if (abs(cos_theta) < EPSILON) cos_theta = 0;
+		if (abs(sin_phi) < EPSILON) sin_phi = 0;
+		if (abs(cos_phi) < EPSILON) cos_phi = 0;
+
+        vec4 trig_funcs = vec4(sin_theta, cos_theta, sin_phi, cos_phi);
+
+        rk4step(*this, blackhole.rad_s, dl, trig_funcs);
+
+        x = r * sin_theta * cos_phi;
+        y = r * sin_theta * sin_phi;
+        z = r * cos_theta;
 
         trail.push_back({ x, y });
     }
 };
 
-vec4 geodesic(Ray& ray, double rad_s, double dl, double y0[4], double temp[4]) {
-    double r = ray.r;
-    double dr = ray.dr;
-    double dphi = ray.dphi;
-    double E = ray.E;
-
-    double f = 1.0 - rad_s / r;
-
-    double dt_dl = E / f;
-
-    double d2r = -(rad_s / (2 * r * r)) * f * (dt_dl * dt_dl)
-                + (rad_s / (2 * r * r * f)) * (dr * dr)
-                + (r - rad_s) * (dphi * dphi);
-
-    double d2phi = -2.0 * dr * dphi / r;
-
-	temp[0] = y0[0] + dr * dl;
-	temp[1] = y0[1] + dphi * dl;
-	temp[2] = y0[2] + d2r * dl;
-    temp[3] = y0[3] + d2phi * dl;
-
-    return vec4(dr, dphi, d2r, d2phi);
-};
-
-void rk4step(Ray& ray, double rad_s, double dl) {
-	double y0[4] = { ray.r, ray.phi, ray.dr, ray.dphi };
-    double temp[4];
-    vec4 dray1 = geodesic(ray, rad_s, dl / 2.0, y0, temp);
-    Ray r2 = ray;  r2.r = temp[0]; r2.phi = temp[1]; r2.dr = temp[2]; r2.dphi = temp[3];
-    vec4 dray2 = geodesic(r2, rad_s, dl / 2.0, y0, temp);
-    Ray r3 = ray; r3.r = temp[0]; r3.phi = temp[1]; r3.dr = temp[2]; r3.dphi = temp[3];
-    vec4 dray3 = geodesic(r3, rad_s, dl, y0, temp);
-    Ray r4 = ray; r4.r = temp[0]; r4.phi = temp[1]; r4.dr = temp[2]; r4.dphi = temp[3];
-    vec4 dray4 = geodesic(r4, rad_s, dl, y0, temp);
-
-    ray.r += (dl / 6.0) * (dray1[0] + 2 * dray2[0] + 2 * dray3[0] + dray4[0]);
-    ray.phi += (dl / 6.0) * (dray1[1] + 2 * dray2[1] + 2 * dray3[1] + dray4[1]);
-    ray.dr += (dl / 6.0) * (dray1[2] + 2 * dray2[2] + 2 * dray3[2] + dray4[2]);
-    ray.dphi += (dl / 6.0) * (dray1[3] + 2 * dray2[3] + 2 * dray3[3] + dray4[3]);
-};
-
 vector<Ray> rays;
 
 int main() {
-    for (float y = -engine.height; y < engine.height; y += 0.3e10) {
-        rays.push_back(Ray(vec2(-engine.width, y), vec2(1.0, 0.0)));
+    double v0 = 1;
+    for (float y = -engine.height; y < engine.height; y += 0.2e10) {
+        rays.push_back(Ray(vec3(-engine.width, y, 1.0e9), vec3(v0, 0.0, 0.0)));
+        rays.push_back(Ray(vec3(engine.width, y, -1.0e9), vec3(-v0, 0.0, 0.0)));
     }
 
     std::cout << "Starting Black Hole Simulator..." << std::endl;
@@ -225,10 +242,10 @@ int main() {
             ray.step(blackhole1, 5e7);
             ray.draw();
         }
-
         glfwSwapBuffers(engine.window);
         glfwPollEvents();
     }
     glfwTerminate();
+
     return 0;
 }
