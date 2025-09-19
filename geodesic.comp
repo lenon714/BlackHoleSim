@@ -38,13 +38,18 @@ void geodesic_derivatives(in Ray ray, float rad_s, out float[6] deriv) {
     deriv[2] = dtheta;
     
     // Second derivatives (accelerations)
-    deriv[3] = -(rad_s / (2.0 * r * r)) * f * (dt_dl * dt_dl)
-             + (rad_s / (2.0 * r * r * f)) * (dr * dr)
-             + r * (dtheta * dtheta + sin_theta * sin_theta * dphi * dphi);
+    // d2r
+    deriv[3] = (rad_s / (2.0 * r * r)) * f * (dt_dl * dt_dl)
+               - (rad_s / (2.0 * r * r * f)) * (dr * dr)
+               - r * f * (dtheta * dtheta + sin_theta * sin_theta * dphi * dphi);
     
-    deriv[4] = -2.0 * dr * dphi / r - 2.0 * cos_theta * dtheta * dphi / sin_theta;
+    // d2phi
+    deriv[4] = -2.0 * dr * dphi / r 
+               - 2.0 * (cos_theta / sin_theta) * dtheta * dphi ;
 
-    deriv[5] = -2.0 * dr * dtheta / r + sin_theta * cos_theta * dphi * dphi;
+    // d2theta
+    deriv[5] = -2.0 * dr * dtheta / r 
+               + sin_theta * cos_theta * dphi * dphi;
 }
 
 Ray rk4_step(Ray ray, float rad_s, float dl) {
@@ -92,7 +97,7 @@ Ray rk4_step(Ray ray, float rad_s, float dl) {
     ray.dr = y0[3] + (dl / 6.0) * (k1[3] + 2.0 * k2[3] + 2.0 * k3[3] + k4[3]);
     ray.dphi = y0[4] + (dl / 6.0) * (k1[4] + 2.0 * k2[4] + 2.0 * k3[4] + k4[4]);
     ray.dtheta = y0[5] + (dl / 6.0) * (k1[5] + 2.0 * k2[5] + 2.0 * k3[5] + k4[5]);
-    
+
     // Update Cartesian coordinates
     float sin_theta = sin(ray.theta);
     float cos_theta = cos(ray.theta);
@@ -103,8 +108,29 @@ Ray rk4_step(Ray ray, float rad_s, float dl) {
     ray.y = ray.r * sin_theta * sin_phi;
     ray.z = ray.r * cos_theta;
     
-    // Update metric
-    ray.f = 1.0 - rad_s / ray.r;
+    return ray;
+}
+
+Ray euler_step(Ray ray, float rad_s, float dl){
+    float deriv[6];
+    geodesic_derivatives(ray, rad_s, deriv);
+    
+    ray.r += dl * deriv[0];
+    ray.phi += dl * deriv[1];
+    ray.theta += dl * deriv[2];
+    ray.dr += dl * deriv[3];
+    ray.dphi += dl * deriv[4];
+    ray.dtheta += dl * deriv[5];
+
+    // Update Cartesian coordinates
+    float sin_theta = sin(ray.theta);
+    float cos_theta = cos(ray.theta);
+    float sin_phi = sin(ray.phi);
+    float cos_phi = cos(ray.phi);
+    
+    ray.x = ray.r * sin_theta * cos_phi;
+    ray.y = ray.r * sin_theta * sin_phi;
+    ray.z = ray.r * cos_theta;
     
     return ray;
 }
@@ -116,10 +142,13 @@ void main() {
     Ray ray = rays[idx];
     
     // Skip if captured
-    if (ray.r <= rad_s) return;
+    if (ray.r <= rad_s) {
+        ray.r = rad_s; 
+        return;
+    }
     
     // Use a fraction of the Schwarzschild radius
-    float dl = 5e7;
+    float dl = 1e-1;
 
-    rays[idx] = rk4_step(ray, rad_s, dl);
+    rays[idx] = euler_step(ray, rad_s, dl);
 }

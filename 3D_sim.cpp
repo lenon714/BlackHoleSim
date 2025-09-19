@@ -36,13 +36,9 @@ struct Ray {
     Ray(vec3 position, vec3 dir, float rad_s) : x(position.x), y(position.y), z(position.z) {
         r = sqrt(x * x + y * y + z * z);
 
-        phi = atan2(y, x);
+        phi = atan(y, x);
 
-        // Clamp z/r to avoid numerical issues with acos
-        float z_over_r = z / r;
-        if (z_over_r > 1.0f) z_over_r = 1.0f;
-        if (z_over_r < -1.0f) z_over_r = -1.0f;
-        theta = acos(z_over_r);
+        theta = acos(z / r);
 
         // Calculate trig functions once
         float sin_theta = sin(theta);
@@ -60,9 +56,9 @@ struct Ray {
 
         dphi = (-dir.x * sin_phi + dir.y * cos_phi) / (r * sin_theta);
 
-        L = r * r * sin(theta) * sin(theta) * dphi;
+        L = r * r * sin(theta) * dphi;
         f = 1.0 - rad_s / r;
-        dt_dl = sqrt((dr * dr) / f + r * r * dtheta * dtheta + sin(theta) * sin(theta) * dphi * dphi);
+        dt_dl = sqrt((dr * dr) / f + r * r * (dtheta * dtheta + sin(theta) * sin(theta) * dphi * dphi));
         E = f * dt_dl;
     }
 
@@ -179,7 +175,7 @@ struct Engine {
     }
 
     void runComputeShader(GLuint computeShader, vector<Ray> rays) {
-        int workGroupsX = ceil((rays.size() + 255) / 256.0);
+        int workGroupsX = ceil((rays.size()) / 256.0);
         int workGroupsY = 1;
         int workGroupsZ = 1;
         glDispatchCompute(workGroupsX, workGroupsY, workGroupsZ);
@@ -231,10 +227,10 @@ struct BlackHole {
     }
 };
 
-BlackHole blackhole1(vec3(0, 0, 0), 8.0e36);
+BlackHole blackhole1(vec3(0, 0, 0), 10.0e36);
 
 int main() {
-    float v0 = 1;
+    float v0 = c;
     for (float y = -engine.height; y < engine.height; y += 0.7e9) {
         rays.push_back(Ray(vec3(-engine.width, y, 0.0), vec3(v0, 0.0, 0.0), blackhole1.rad_s));
         rays.push_back(Ray(vec3(engine.width, y, 0.0), vec3(-v0, 0.0, 0.0), blackhole1.rad_s));
@@ -253,7 +249,7 @@ int main() {
     engine.start();
 
     while (!glfwWindowShouldClose(engine.window)) {
-        glClear(GL_COLOR_BUFFER_BIT);
+        //glClear(GL_COLOR_BUFFER_BIT);
         engine.runComputeShader(engine.computeShader, rays);
 
         glMemoryBarrier(GL_ALL_BARRIER_BITS);
@@ -261,11 +257,11 @@ int main() {
 		glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(Ray) * rays.size(), rays.data());
 		glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
-        /*int i = 0;
+        int i = 0;
 	    cout << rays[i].x << ", " << rays[i].y << ", " << rays[i].z << ", " 
-           << rays[i].r << ", " << rays[i].theta << ", " << rays[i].phi << ", "
-           << rays[i].dr << ", " << rays[i].dtheta << ", " << rays[i].dphi << ", " 
-           << blackhole1.rad_s << endl;*/
+           << rays[i].r << ", " << rays[i].phi << ", " << rays[i].theta << ", "
+           << rays[i].dr << ", " << rays[i].dphi << ", " << rays[i].dtheta << ", "
+           << blackhole1.rad_s << endl;
 
         blackhole1.draw();
         for (auto& ray : rays) {
