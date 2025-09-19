@@ -1,96 +1,125 @@
-#version 430
+#version 450 core
 
-// Define the local work group size
-layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+uniform float rad_s;
 
-// Define your storage buffers or images
-layout(std430, binding = 0) buffer RayBuffer {
-    float rays[];
-};
+const float EPSILON = 1e-10;
 
-layout(std430, binding = 1) buffer ScreenBuffer {
-    float pixels[];
-};
-
-// Optional: uniform variables
-uniform double rad_s;
-
-const double EPSILON = 1e-10;
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 struct Ray {
-    double r;
-    double phi;
-    double theta;
-    double dr;
-    double dphi;
-    double dtheta;
-    double E; // Energy of the photon
+    float x, y, z;
+    float r, phi, theta;
+    float dr, dphi, dtheta;
+    float E, L, f, dt_dl;
 };
 
-double[6] geodesic(Ray ray, double rad_s, double dl, double y0[6], double temp[6], vec4 trig_funcs) {
-    double r = ray.r; double theta = ray.theta;
-    double dr = ray.dr; double dphi = ray.dphi; double dtheta = ray.dtheta;
-    double E = ray.E;
+layout(std430, binding = 0) buffer RayBuffer {
+    Ray rays[];
+};
 
-	double sin_theta = trig_funcs[0]; double cos_theta = trig_funcs[1];
-    double sin_phi = trig_funcs[2]; double cos_phi = trig_funcs[3];
-
-    double f = 1.0 - rad_s / r;
-    double dt_dl = E / f;
-
-    double d2r = -(rad_s / (2 * r * r)) * f * (dt_dl * dt_dl)
-                + (rad_s / (2 * r * r * f)) * (dr * dr)
-                + r * (dtheta * dtheta + sin_theta * sin_theta * dphi * dphi);
-
-    double phi_term2;
-    if (sin_theta < EPSILON) phi_term2 = 0.0;
-    else phi_term2 = -2.0 * (cos_theta / sin_theta) * dtheta * dphi;
-    double d2phi = (-2.0 * dr * dphi / r) - phi_term2;
-                 
-    double d2theta = (-2.0 * dr * dtheta / r) 
-                    + sin_theta * cos_theta * dphi * dphi;
+// Simplified geodesic function that just computes derivatives
+void geodesic_derivatives(in Ray ray, float rad_s, out float[6] deriv) {
+    float r = ray.r;
+    float theta = ray.theta;
+    float dr = ray.dr;
+    float dphi = ray.dphi;
+    float dtheta = ray.dtheta;
     
-    temp[0] = y0[0] + dr * dl;
-    temp[1] = y0[1] + dphi * dl;
-	temp[2] = y0[2] + dtheta * dl;
-    temp[3] = y0[3] + d2r * dl;
-    temp[4] = y0[4] + d2phi * dl;
-	temp[5] = y0[5] + d2theta * dl;
+    float sin_theta = sin(theta);
+    float cos_theta = cos(theta);
+    
+    float f = 1.0 - rad_s / r;
+    float E = ray.E;
+    float dt_dl = E / f;
+    
+    // First derivatives (velocities)
+    deriv[0] = dr;
+    deriv[1] = dphi;
+    deriv[2] = dtheta;
+    
+    // Second derivatives (accelerations)
+    deriv[3] = -(rad_s / (2.0 * r * r)) * f * (dt_dl * dt_dl)
+             + (rad_s / (2.0 * r * r * f)) * (dr * dr)
+             + r * (dtheta * dtheta + sin_theta * sin_theta * dphi * dphi);
+    
+    deriv[4] = -2.0 * dr * dphi / r - 2.0 * cos_theta * dtheta * dphi / sin_theta;
 
-    return double[6] (dr, dphi, dtheta, d2r, d2phi, d2theta);
+    deriv[5] = -2.0 * dr * dtheta / r + sin_theta * cos_theta * dphi * dphi;
 }
 
-void rk4step(Ray ray, double rad_s, double dl, vec4 trig_funcs) {
-    double y0[6] = { ray.r, ray.phi, ray.theta, ray.dr, ray.dphi, ray.dtheta };
-    double temp[6];
-    double[6] dray1, dray2, dray3, dray4;
-
-    dray1 = geodesic(ray, rad_s, dl / 2.0, y0, temp, trig_funcs);
-
-	Ray r2 = ray; r2.r = temp[0]; r2.phi = temp[1]; r2.theta = temp[2]; 
-                  r2.dr = temp[3]; r2.dphi = temp[4]; r2.dtheta = temp[5];
-    dray2 = geodesic(r2, rad_s, dl / 2.0, y0, temp, trig_funcs);
-
-    Ray r3 = ray; r3.r = temp[0]; r3.phi = temp[1]; r3.theta = temp[2]; 
-                  r3.dr = temp[3]; r3.dphi = temp[4]; r3.dtheta = temp[5];
-    dray3 = geodesic(r3, rad_s, dl, y0, temp, trig_funcs);
-
-    Ray r4 = ray; r4.r = temp[0]; r4.phi = temp[1]; r4.theta = temp[2]; 
-                  r4.dr = temp[3]; r4.dphi = temp[4]; r4.dtheta = temp[5];
-    dray4 = geodesic(r4, rad_s, dl, y0, temp, trig_funcs);
-
-    ray.r      += (dl / 6.0) * (dray1[0] + 2 * dray2[0] + 2 * dray3[0] + dray4[0]);
-    ray.phi    += (dl / 6.0) * (dray1[1] + 2 * dray2[1] + 2 * dray3[1] + dray4[1]);
-	ray.theta  += (dl / 6.0) * (dray1[2] + 2 * dray2[2] + 2 * dray3[2] + dray4[2]);
-    ray.dr     += (dl / 6.0) * (dray1[3] + 2 * dray2[3] + 2 * dray3[3] + dray4[3]);
-    ray.dphi   += (dl / 6.0) * (dray1[4] + 2 * dray2[4] + 2 * dray3[4] + dray4[4]);
-	ray.dtheta += (dl / 6.0) * (dray1[5] + 2 * dray2[5] + 2 * dray3[5] + dray4[5]);
-};
+Ray rk4_step(Ray ray, float rad_s, float dl) {
+    // Store initial state
+    float y0[6] = { ray.r, ray.phi, ray.theta, ray.dr, ray.dphi, ray.dtheta };
+    float k1[6], k2[6], k3[6], k4[6];
+    
+    // k1 - derivatives at initial point
+    geodesic_derivatives(ray, rad_s, k1);
+    
+    // k2 - derivatives at midpoint using k1
+    Ray ray2 = ray;
+    ray2.r = y0[0] + 0.5 * dl * k1[0];
+    ray2.phi = y0[1] + 0.5 * dl * k1[1];
+    ray2.theta = y0[2] + 0.5 * dl * k1[2];
+    ray2.dr = y0[3] + 0.5 * dl * k1[3];
+    ray2.dphi = y0[4] + 0.5 * dl * k1[4];
+    ray2.dtheta = y0[5] + 0.5 * dl * k1[5];
+    geodesic_derivatives(ray2, rad_s, k2);
+    
+    // k3 - derivatives at midpoint using k2
+    Ray ray3 = ray;
+    ray3.r = y0[0] + 0.5 * dl * k2[0];
+    ray3.phi = y0[1] + 0.5 * dl * k2[1];
+    ray3.theta = y0[2] + 0.5 * dl * k2[2];
+    ray3.dr = y0[3] + 0.5 * dl * k2[3];
+    ray3.dphi = y0[4] + 0.5 * dl * k2[4];
+    ray3.dtheta = y0[5] + 0.5 * dl * k2[5];
+    geodesic_derivatives(ray3, rad_s, k3);
+    
+    // k4 - derivatives at endpoint using k3
+    Ray ray4 = ray;
+    ray4.r = y0[0] + dl * k3[0];
+    ray4.phi = y0[1] + dl * k3[1];
+    ray4.theta = y0[2] + dl * k3[2];
+    ray4.dr = y0[3] + dl * k3[3];
+    ray4.dphi = y0[4] + dl * k3[4];
+    ray4.dtheta = y0[5] + dl * k3[5];
+    geodesic_derivatives(ray4, rad_s, k4);
+    
+    // Combine with RK4 weights
+    ray.r = y0[0] + (dl / 6.0) * (k1[0] + 2.0 * k2[0] + 2.0 * k3[0] + k4[0]);
+    ray.phi = y0[1] + (dl / 6.0) * (k1[1] + 2.0 * k2[1] + 2.0 * k3[1] + k4[1]);
+    ray.theta = y0[2] + (dl / 6.0) * (k1[2] + 2.0 * k2[2] + 2.0 * k3[2] + k4[2]);
+    ray.dr = y0[3] + (dl / 6.0) * (k1[3] + 2.0 * k2[3] + 2.0 * k3[3] + k4[3]);
+    ray.dphi = y0[4] + (dl / 6.0) * (k1[4] + 2.0 * k2[4] + 2.0 * k3[4] + k4[4]);
+    ray.dtheta = y0[5] + (dl / 6.0) * (k1[5] + 2.0 * k2[5] + 2.0 * k3[5] + k4[5]);
+    
+    // Update Cartesian coordinates
+    float sin_theta = sin(ray.theta);
+    float cos_theta = cos(ray.theta);
+    float sin_phi = sin(ray.phi);
+    float cos_phi = cos(ray.phi);
+    
+    ray.x = ray.r * sin_theta * cos_phi;
+    ray.y = ray.r * sin_theta * sin_phi;
+    ray.z = ray.r * cos_theta;
+    
+    // Update metric
+    ray.f = 1.0 - rad_s / ray.r;
+    
+    return ray;
+}
 
 void main() {
-    // Get the current invocation's indices
-    uvec3 gid = gl_GlobalInvocationID;
-    uint idx = gid.x + gid.y * gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= rays.length()) return;
     
-    rays[idx]
+    Ray ray = rays[idx];
+    
+    // Skip if captured
+    if (ray.r <= rad_s) return;
+    
+    // Use a fraction of the Schwarzschild radius
+    float dl = 5e7;
+
+    rays[idx] = rk4_step(ray, rad_s, dl);
 }

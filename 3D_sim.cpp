@@ -1,4 +1,4 @@
-#include <GL/glew.h>
+﻿#include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -13,7 +13,6 @@
 #include <cstring>
 #include <chrono>
 #include <fstream>
-#include <sstream>
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #pragma comment(lib, "opengl32.lib")
@@ -24,10 +23,59 @@ using Clock = std::chrono::high_resolution_clock;
 
 const double G = 6.67e-11;
 const double c = 299792458.0;
-const double EPSILON = 1e-10;
+const float EPSILON = 1e-10;
 
-struct Ray;
-void rk4step(Ray& ray, double rad_s, double dl, vec4 trig_funcs);
+struct Ray {
+    // Cartesian Coordinates
+    float x, y, z;
+    // Polar Coordinates
+    float r, phi, theta;
+    float dr, dphi, dtheta;
+    float E, L, f, dt_dl;
+
+    Ray(vec3 position, vec3 dir, float rad_s) : x(position.x), y(position.y), z(position.z) {
+        r = sqrt(x * x + y * y + z * z);
+
+        phi = atan2(y, x);
+
+        // Clamp z/r to avoid numerical issues with acos
+        float z_over_r = z / r;
+        if (z_over_r > 1.0f) z_over_r = 1.0f;
+        if (z_over_r < -1.0f) z_over_r = -1.0f;
+        theta = acos(z_over_r);
+
+        // Calculate trig functions once
+        float sin_theta = sin(theta);
+        float cos_theta = cos(theta);
+        float sin_phi = sin(phi);
+        float cos_phi = cos(phi);
+
+        dr = dir.x * sin_theta * cos_phi +
+             dir.y * sin_theta * sin_phi +
+             dir.z * cos_theta;
+
+        dtheta = (dir.x * cos_theta * cos_phi +
+                  dir.y * cos_theta * sin_phi -
+                  dir.z * sin_theta) / r;
+
+        dphi = (-dir.x * sin_phi + dir.y * cos_phi) / (r * sin_theta);
+
+        L = r * r * sin(theta) * sin(theta) * dphi;
+        f = 1.0 - rad_s / r;
+        dt_dl = sqrt((dr * dr) / f + r * r * dtheta * dtheta + sin(theta) * sin(theta) * dphi * dphi);
+        E = f * dt_dl;
+    }
+
+    void draw() {
+        glPointSize(2.0f);
+        glColor3f(1.0f, 1.0f, 1.0f);
+        glBegin(GL_POINTS);
+        glVertex2f(x, y);
+        glEnd();
+    }
+};
+
+vector<Ray> rays;
 
 struct Engine {
     GLFWwindow* window;
@@ -35,6 +83,9 @@ struct Engine {
     int WIDTH = 1000;
     double width = 1e11;
     double height = 7.5e10;
+
+	GLuint computeShader;
+    GLuint rayBuffer;
 
     Engine() {
         if (!glfwInit()) {
@@ -48,6 +99,11 @@ struct Engine {
             exit(EXIT_FAILURE);
         }
         glfwMakeContextCurrent(window);
+        GLenum err = glewInit();
+        if (err != GLEW_OK) {
+            std::cerr << "GLEW initialization failed: " << glewGetErrorString(err) << std::endl;
+            exit(EXIT_FAILURE);
+        }
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 
         std::cout << "Viewport: " << width << " x " << height << " meters" << std::endl;
@@ -66,45 +122,73 @@ struct Engine {
         glLoadIdentity();
     }
 
-    std::string loadShaderSource(const char* filepath) {
-        std::ifstream file(filepath);
+    string loadShaderSource(const char* filepath) {
+        ifstream file(filepath);
         if (!file.is_open()) {
             std::cerr << "Failed to open shader file: " << filepath << std::endl;
             return "";
         }
 
-        std::stringstream buffer;
+        stringstream buffer;
         buffer << file.rdbuf();
         return buffer.str();
     }
 
-    void createBuffers() {
-        // Load your compute shader file
-        std::string computeSource = loadShaderSource("geodesic.comp");
+    void loadShaders() {
+        // Load compute shader
+        string computeSource = loadShaderSource("geodesic.comp");
         const char* source = computeSource.c_str();
 
-        // Create and compile the compute shader
-        GLuint computeShader = glCreateShader(GL_COMPUTE_SHADER);
+        // Create and compile compute shader
+        computeShader = glCreateShader(GL_COMPUTE_SHADER);
         glShaderSource(computeShader, 1, &source, NULL);
         glCompileShader(computeShader);
 
-        // Create and bind buffers
-        GLuint RayBuffer, ScreenBuffer;
-        glGenBuffers(1, &RayBuffer);
-        glGenBuffers(1, &ScreenBuffer);
+        // Check for compilation errors
+        GLint success;
+        GLchar infoLog[512];
+        glGetShaderiv(computeShader, GL_COMPILE_STATUS, &success);
+        if (!success) {
+            glGetShaderInfoLog(computeShader, 512, NULL, infoLog);
+            std::cerr << "Compute shader compilation failed:\n" << infoLog << std::endl;
+            return;
+        }
 
-        // Bind buffers to shader binding points
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, RayBuffer);
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, ScreenBuffer);
+        // Create and link program
+        GLuint computeProgram = glCreateProgram();
+        glAttachShader(computeProgram, computeShader);
+        glLinkProgram(computeProgram);
 
-        // Dispatch compute shader
-		int workGroupsX = (WIDTH + 15) / 16;
-		int workGroupsY = (HEIGHT + 15) / 16;
-		int workGroupsZ = 1;
-        glUseProgram(computeShader);
-        glDispatchCompute(workGroupsX, workGroupsY, workGroupsZ);
-        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+        // Check for linking errors
+        glGetProgramiv(computeProgram, GL_LINK_STATUS, &success);
+        if (!success) {
+            glGetProgramInfoLog(computeProgram, 512, NULL, infoLog);
+            std::cerr << "Program linking failed:\n" << infoLog << std::endl;
+            return;
+        }
+        computeShader = computeProgram; // Store program ID for later use
     }
+
+    void createBuffers(vector<Ray> rays) {
+        // Create and bind ray buffer
+        glGenBuffers(1, &rayBuffer);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, rayBuffer);
+        glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(Ray) * rays.size(), rays.data(), GL_DYNAMIC_DRAW);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, rayBuffer);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    }
+
+    void runComputeShader(GLuint computeShader, vector<Ray> rays) {
+        int workGroupsX = ceil((rays.size() + 255) / 256.0);
+        int workGroupsY = 1;
+        int workGroupsZ = 1;
+        glDispatchCompute(workGroupsX, workGroupsY, workGroupsZ);
+		glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    }
+
+    void deleteShaders() {
+        glDeleteProgram(computeShader);
+	}
 };
 
 Engine engine;
@@ -112,7 +196,7 @@ Engine engine;
 struct BlackHole {
     vec2 pos;
     double m;
-    double rad_s;
+    float rad_s;
 
     BlackHole(vec3 position, double mass) : pos(position), m(mass) {
         rad_s = (2.0 * G * mass) / (c * c);
@@ -149,102 +233,50 @@ struct BlackHole {
 
 BlackHole blackhole1(vec3(0, 0, 0), 8.0e36);
 
-struct Ray {
-    // Cartesian Coordinates
-    double x; double y; double z;
-    // Polar Coordinates
-    double r; double phi; double theta;
-	double dr; double dphi; double dtheta;
-
-    vector<vec2> trail;
-    double E, L;
-
-    Ray(vec3 position, vec3 dir) : x(position.x), y(position.y), z(position.z) {
-        r = sqrt(x * x + y * y + z * z);
-        phi = atan2(y, x);
-        theta = acos(z / r);
-        dr = dir.x * sin(theta) * cos(phi) + dir.y * sin(theta) * sin(phi) + cos(theta) * dir.z;
-        dphi = (dir.x * -sin(phi) + dir.y * sin(phi)) / (r * sin(theta));
-        dtheta = (dir.x * cos(theta) * cos(phi) + dir.y * cos(theta) * sin(phi) - sin(theta) * dir.z) / r;
-
-        L = r * r * sin(theta) * dphi;
-        double f = 1.0 - blackhole1.rad_s / r;
-        double dt_dL = sqrt((dr * dr) / f + r * r * dtheta * dtheta + sin(theta) * sin(theta) * dphi * dphi);
-        E = f * dt_dL;
-
-        trail.push_back({ x,y });
-    }
-
-    void draw() {
-        glPointSize(2.0f);
-        glColor3f(1.0f, 1.0f, 1.0f);
-        glBegin(GL_POINTS);
-        glVertex2f(x, y);
-        glEnd();
-
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glLineWidth(2.0f);
-
-        size_t N = trail.size();
-        if (N < 2) return;
-
-        glBegin(GL_LINE_STRIP);
-        for (size_t i = 0; i < N; ++i) {
-            float alpha = float(i) / float(N - 1);
-            glColor4f(1.0, 1.0, 1.0, alpha);
-            glVertex2d(trail[i].x, trail[i].y);
-        }
-        glEnd();
-    }
-
-    void step(BlackHole blackhole, double dl) {
-        if (r <= blackhole.rad_s) return;
-
-        double sin_theta = sin(theta);
-        double cos_theta = cos(theta);
-        double sin_phi = sin(phi);
-        double cos_phi = cos(phi);
-
-		if (abs(sin_theta) < EPSILON) sin_theta = 0;
-		if (abs(cos_theta) < EPSILON) cos_theta = 0;
-		if (abs(sin_phi) < EPSILON) sin_phi = 0;
-		if (abs(cos_phi) < EPSILON) cos_phi = 0;
-
-        vec4 trig_funcs = vec4(sin_theta, cos_theta, sin_phi, cos_phi);
-
-        rk4step(*this, blackhole.rad_s, dl, trig_funcs);
-
-        x = r * sin_theta * cos_phi;
-        y = r * sin_theta * sin_phi;
-        z = r * cos_theta;
-
-        trail.push_back({ x, y });
-    }
-};
-
-vector<Ray> rays;
-
 int main() {
-    double v0 = 1;
-    for (float y = -engine.height; y < engine.height; y += 0.2e10) {
-        rays.push_back(Ray(vec3(-engine.width, y, 1.0e9), vec3(v0, 0.0, 0.0)));
-        rays.push_back(Ray(vec3(engine.width, y, -1.0e9), vec3(-v0, 0.0, 0.0)));
+    float v0 = 1;
+    for (float y = -engine.height; y < engine.height; y += 0.7e9) {
+        rays.push_back(Ray(vec3(-engine.width, y, 0.0), vec3(v0, 0.0, 0.0), blackhole1.rad_s));
+        rays.push_back(Ray(vec3(engine.width, y, 0.0), vec3(-v0, 0.0, 0.0), blackhole1.rad_s));
     }
+
+    cout << "Initialized " << rays.size() << " rays." << endl;
+	cout << ceil(rays.size() / 16.0) << " work groups will be dispatched per frame." << endl;
+
+    engine.loadShaders();
+    engine.createBuffers(rays);
+	glUseProgram(engine.computeShader);
+    glUniform1f(glGetUniformLocation(engine.computeShader, "rad_s"), blackhole1.rad_s);
 
     std::cout << "Starting Black Hole Simulator..." << std::endl;
 
-    while (!glfwWindowShouldClose(engine.window)) {
-        engine.start();
-        blackhole1.draw();
+    engine.start();
 
+    while (!glfwWindowShouldClose(engine.window)) {
+        glClear(GL_COLOR_BUFFER_BIT);
+        engine.runComputeShader(engine.computeShader, rays);
+
+        glMemoryBarrier(GL_ALL_BARRIER_BITS);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, engine.rayBuffer);
+		glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(Ray) * rays.size(), rays.data());
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+        /*int i = 0;
+	    cout << rays[i].x << ", " << rays[i].y << ", " << rays[i].z << ", " 
+           << rays[i].r << ", " << rays[i].theta << ", " << rays[i].phi << ", "
+           << rays[i].dr << ", " << rays[i].dtheta << ", " << rays[i].dphi << ", " 
+           << blackhole1.rad_s << endl;*/
+
+        blackhole1.draw();
         for (auto& ray : rays) {
-            ray.step(blackhole1, 5e7);
             ray.draw();
         }
+
         glfwSwapBuffers(engine.window);
         glfwPollEvents();
     }
+    glDeleteBuffers(1, &engine.rayBuffer);
+    glDeleteProgram(engine.computeShader);
     glfwTerminate();
 
     return 0;
