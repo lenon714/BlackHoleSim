@@ -3,6 +3,7 @@
 uniform float rad_s;
 
 const float EPSILON = 1e-10;
+const int MAX_TRAIL_SIZE = 10;
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
@@ -39,9 +40,9 @@ void geodesic_derivatives(in Ray ray, float rad_s, out float[6] deriv) {
     
     // Second derivatives (accelerations)
     // d2r
-    deriv[3] = (rad_s / (2.0 * r * r)) * f * (dt_dl * dt_dl)
-               - (rad_s / (2.0 * r * r * f)) * (dr * dr)
-               - r * f * (dtheta * dtheta + sin_theta * sin_theta * dphi * dphi);
+    deriv[3] = - (rad_s / (2.0 * r * r)) * f * (dt_dl * dt_dl)
+               + (rad_s / (2.0 * r * r * f)) * (dr * dr)
+               + r * f * (dtheta * dtheta + sin_theta * sin_theta * dphi * dphi);
     
     // d2phi
     deriv[4] = -2.0 * dr * dphi / r 
@@ -107,7 +108,7 @@ Ray rk4_step(Ray ray, float rad_s, float dl) {
     ray.x = ray.r * sin_theta * cos_phi;
     ray.y = ray.r * sin_theta * sin_phi;
     ray.z = ray.r * cos_theta;
-    
+
     return ray;
 }
 
@@ -131,7 +132,7 @@ Ray euler_step(Ray ray, float rad_s, float dl){
     ray.x = ray.r * sin_theta * cos_phi;
     ray.y = ray.r * sin_theta * sin_phi;
     ray.z = ray.r * cos_theta;
-    
+
     return ray;
 }
 
@@ -148,7 +149,7 @@ void main() {
     }
     
     // Use a fraction of the Schwarzschild radius
-    float dl = 1e-1;
+    float dl = 3e-1;
 
     rays[idx] = euler_step(ray, rad_s, dl);
 }

@@ -73,6 +73,33 @@ struct Ray {
 
 vector<Ray> rays;
 
+struct Trail {
+	vector<vec2> trail;
+
+    Trail() {}
+
+    void update(Ray& ray) {
+		trail.push_back(vec2(ray.x, ray.y));
+	}
+    void draw() {
+        if (trail.size() < 2) return;
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glLineWidth(1.5f);
+
+        glBegin(GL_LINE_STRIP);
+        for (size_t i = 0; i < trail.size(); ++i) {
+            float alpha = float(i) / float(trail.size() - 1);
+            glColor4f(1.0f, 1.0f, 1.0f, alpha);
+            glVertex2f(trail[i].x, trail[i].y);
+        }
+        glEnd();
+    }
+};
+
+vector<Trail> trails;
+
 struct Engine {
     GLFWwindow* window;
     int HEIGHT = 750;
@@ -227,13 +254,15 @@ struct BlackHole {
     }
 };
 
-BlackHole blackhole1(vec3(0, 0, 0), 10.0e36);
+BlackHole blackhole1(vec3(0, 0, 0), 8.0e36);
 
 int main() {
     float v0 = c;
-    for (float y = -engine.height; y < engine.height; y += 0.7e9) {
+    for (float y = -engine.height; y < engine.height; y += 0.2e10) {
         rays.push_back(Ray(vec3(-engine.width, y, 0.0), vec3(v0, 0.0, 0.0), blackhole1.rad_s));
+        trails.push_back(Trail());
         rays.push_back(Ray(vec3(engine.width, y, 0.0), vec3(-v0, 0.0, 0.0), blackhole1.rad_s));
+        trails.push_back(Trail());
     }
 
     cout << "Initialized " << rays.size() << " rays." << endl;
@@ -249,7 +278,7 @@ int main() {
     engine.start();
 
     while (!glfwWindowShouldClose(engine.window)) {
-        //glClear(GL_COLOR_BUFFER_BIT);
+		glClear(GL_COLOR_BUFFER_BIT);
         engine.runComputeShader(engine.computeShader, rays);
 
         glMemoryBarrier(GL_ALL_BARRIER_BITS);
@@ -257,15 +286,16 @@ int main() {
 		glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(Ray) * rays.size(), rays.data());
 		glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
-        int i = 0;
-	    cout << rays[i].x << ", " << rays[i].y << ", " << rays[i].z << ", " 
-           << rays[i].r << ", " << rays[i].phi << ", " << rays[i].theta << ", "
-           << rays[i].dr << ", " << rays[i].dphi << ", " << rays[i].dtheta << ", "
-           << blackhole1.rad_s << endl;
+        for (size_t i = 0; i < rays.size(); ++i) {
+            trails[i].update(rays[i]);
+        }
 
         blackhole1.draw();
-        for (auto& ray : rays) {
-            ray.draw();
+
+        // Draw rays and their trails
+        for (size_t i = 0; i < rays.size(); ++i) {
+            rays[i].draw();
+            trails[i].draw();
         }
 
         glfwSwapBuffers(engine.window);
