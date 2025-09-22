@@ -8,8 +8,8 @@ const double c = 299792458.0; // Speed of light in m/s
 
 const int HEIGHT = 750;
 const int WIDTH = 1000;
-const int COMPUTE_HEIGHT = 600;
-const int COMPUTE_WIDTH = 800;
+const int COMPUTE_HEIGHT = 300;
+const int COMPUTE_WIDTH = 400;
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
@@ -47,14 +47,9 @@ Ray initRay(dvec3 position, dvec3 dir, double rad_s) {
     // Continue with mixed precision...
     ray.dtheta = (dir.x * double(cos_theta * cos_phi) +
                   dir.y * double(cos_theta * sin_phi) -
-                  dir.z * double(sin_theta)) / ray.r;
+                  dir.z * double(sin_theta));
     
-    if (abs(sin_theta) < EPSILON) {
-        ray.dphi = 0.0;
-    } else {
-        ray.dphi = (-dir.x * double(sin_phi) + dir.y * double(cos_phi)) / 
-                   (ray.r * double(sin_theta));
-    }
+    ray.dphi = -dir.x * double(sin_phi) + dir.y * double(cos_phi);
     
     ray.L = ray.r * ray.r * double(sin_theta) * ray.dphi;
     ray.f = 1.0 - rad_s / ray.r;
@@ -67,6 +62,10 @@ Ray initRay(dvec3 position, dvec3 dir, double rad_s) {
 }
 
 layout(rgba32f, binding = 0) writeonly uniform image2D outputImage;
+
+layout(std430, binding = 1) buffer RayBuffer {
+    double rays[];
+};
 
 // Simplified geodesic function that just computes derivatives
 void geodesic_derivatives(in Ray ray, out double[6] deriv) {
@@ -95,7 +94,7 @@ void geodesic_derivatives(in Ray ray, out double[6] deriv) {
                + r * f * (dtheta * dtheta + double(sin_theta * sin_theta) * dphi * dphi);
     
     // d2phi
-    deriv[4] = -2.0 * dr * dphi / r 
+    deriv[4] = -2.0 * dr * dphi / r;
                - 2.0 * double((cos_theta / sin_theta)) * dtheta * dphi ;
 
     // d2theta
@@ -113,6 +112,7 @@ Ray rk4_step(Ray ray, double dl) {
     
     // k2 - derivatives at midpoint using k1
     Ray ray2 = ray;
+    ray2.E = ray.E;
     ray2.r = y0[0] + 0.5 * dl * k1[0];
     ray2.phi = y0[1] + 0.5 * dl * k1[1];
     ray2.theta = y0[2] + 0.5 * dl * k1[2];
@@ -123,6 +123,7 @@ Ray rk4_step(Ray ray, double dl) {
     
     // k3 - derivatives at midpoint using k2
     Ray ray3 = ray;
+    ray3.E = ray.E;
     ray3.r = y0[0] + 0.5 * dl * k2[0];
     ray3.phi = y0[1] + 0.5 * dl * k2[1];
     ray3.theta = y0[2] + 0.5 * dl * k2[2];
@@ -133,6 +134,7 @@ Ray rk4_step(Ray ray, double dl) {
     
     // k4 - derivatives at endpoint using k3
     Ray ray4 = ray;
+    ray4.E = ray.E;
     ray4.r = y0[0] + dl * k3[0];
     ray4.phi = y0[1] + dl * k3[1];
     ray4.theta = y0[2] + dl * k3[2];
@@ -167,13 +169,13 @@ void main() {
     ivec2 imgSize = imageSize(outputImage);
     if (pixel.x >= imgSize.x || pixel.y >= imgSize.y)
         return;
-    
+
     float u = (float(pixel.x) / float(imgSize.x)) * 2.0 - 1.0;
     float v = (float(pixel.y) / float(imgSize.y)) * 2.0 - 1.0;
     
     // Move camera much farther away
-    float cameraDistance = 1e8;
-    vec3 cameraPos = vec3(0, 0, cameraDistance);
+    double cameraDistance = 1e11;
+    vec3 cameraPos = vec3(1e5, 1e5, cameraDistance);
     
     vec3 rayDir;
     float aspectRatio = float(imgSize.x) / float(imgSize.y);
@@ -185,18 +187,43 @@ void main() {
     
     Ray ray = initRay(cameraPos, rayDir, rad_s);
     
-    vec4 color = vec4(0.0, 0.0, 0.2, 1.0); // Space
+    double r0 = ray.r;
+
+    vec4 color = vec4(0.0, 0.0, 0.0, 1.0); // Space
     
-    for (int i = 0; i < 1000; i++) {
+    uint steps = 0;
+    while (steps < MAX_STEPS){
         if (ray.r <= rad_s * 1.01) {  // Just outside event horizon
             color = vec4(1.0, 0.0, 0.0, 1.0);
             break;
         }
-        if (ray.r > cameraDistance * 2.0) {  // Escaped
+        else if (ray.r > 2 * cameraDistance) { // Far distance
+            color = vec4(0.0, 0.0, 0.2, 1.0);
             break;
         }
-        ray = rk4_step(ray, 0.01);
+
+//        if (ray.r < r0) { // Near distance
+//            color = vec4(0.0, 1.0, 0.2, 1.0);
+//            break;
+//        }
+//        else if (ray.r > r0) {
+//            color = vec4(0.0, 1.0, 1.0, 1.0);
+//            break;
+//        }
+
+//        double dt = 10;
+//        ray.x += rayDir.x * c * dt;
+//        ray.y += rayDir.y * c * dt;
+//        ray.z += rayDir.z * c * dt;
+//        ray.r = sqrt(ray.x * ray.x + ray.y * ray.y + ray.z * ray.z);
+
+        ray = rk4_step(ray, 1e7);
+
+        steps++;
     }
+
+    uint idx = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * COMPUTE_WIDTH;
+    rays[idx] = ray.r;
 
     imageStore(outputImage, pixel, color);
 }

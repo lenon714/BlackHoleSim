@@ -33,7 +33,7 @@ struct Ray {
     float dr, dphi, dtheta;
     float E, L, f, dt_dl;
 
-    Ray(vec3 position, vec3 dir, float rad_s) : x(position.x), y(position.y), z(position.z) {
+    Ray(vec3 position, vec3 dir, double rad_s) : x(position.x), y(position.y), z(position.z) {
         r = sqrt(x * x + y * y + z * z);
 
         phi = atan(y, x);
@@ -71,8 +71,6 @@ struct Ray {
     }
 };
 
-vector<Ray> rays;
-
 struct Trail {
 	vector<vec2> trail;
 
@@ -104,8 +102,8 @@ struct Engine {
     GLFWwindow* window;
     int HEIGHT = 750;
     int WIDTH = 1000;
-    int COMPUTE_HEIGHT = 600;
-	int COMPUTE_WIDTH = 800;
+    int COMPUTE_HEIGHT = 300;
+	int COMPUTE_WIDTH = 400;
     double width = 1e11;
     double height = 7.5e10;
 
@@ -350,7 +348,7 @@ struct BlackHole {
     }
 };
 
-BlackHole blackhole1(vec3(0, 0, 0), 2.0e31);
+BlackHole blackhole1(vec3(0, 0, 0), 8.0e36);
 
 struct Camera {
     vec3 position;
@@ -363,17 +361,48 @@ struct Camera {
 Camera camera(vec3(0, 0, 1e11), vec3(0, 0, -1), 60.0f);
 
 int main() {
-    cout << "Initialized " << rays.size() << " rays." << endl;
-	cout << ceil(rays.size() / 16.0) << " work groups will be dispatched per frame." << endl;    
+    int num_rays = engine.COMPUTE_HEIGHT * engine.COMPUTE_WIDTH;
+
+    cout << "Initialized " << num_rays << " rays." << endl;
+	cout << ceil(num_rays / 16.0) << " work groups will be dispatched per frame." << endl;    
 
     std::cout << "Starting Black Hole Simulator..." << std::endl;
 
-    vector<unsigned char> pixels(engine.COMPUTE_WIDTH * engine.COMPUTE_HEIGHT * 3);
+    cout << "Swartzschild Radius: " << blackhole1.rad_s << endl;
 
-    cout << blackhole1.rad_s << endl;
+	double* rays = new double[num_rays]();
+
+    GLuint rayBuffer;
+
+    glGenBuffers(1, &rayBuffer);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, rayBuffer);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(double) * num_rays, rays, GL_DYNAMIC_DRAW);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, rayBuffer);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
     while (!glfwWindowShouldClose(engine.window)) {
         engine.renderScene(blackhole1.rad_s);
+
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+        
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, rayBuffer);
+        double* mappedRays = (double*)glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_READ_ONLY);
+
+        int centerX = engine.COMPUTE_WIDTH / 2;
+        int centerY = engine.COMPUTE_HEIGHT / 2;
+        int centerIndex = centerY * engine.COMPUTE_WIDTH + centerX;
+
+        if (mappedRays) {
+            cout << mappedRays[centerIndex] << endl;
+            glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+        }
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+        /*glBindBuffer(GL_SHADER_STORAGE_BUFFER, rayBuffer);
+        glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(double) * num_rays, rays);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);*/
+
+        //int i = 60000;
+	    //cout << rays[i] << endl;
     }
     glDeleteProgram(engine.computeShader);
     glfwTerminate();
