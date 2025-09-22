@@ -3,7 +3,7 @@
 uniform double rad_s;
 
 const double EPSILON = 1e-10;
-const int MAX_STEPS = 10000;
+const int MAX_STEPS = 80000;
 const double c = 299792458.0; // Speed of light in m/s
 
 const int HEIGHT = 750;
@@ -35,7 +35,7 @@ Ray initRay(dvec3 position, dvec3 dir, double rad_s) {
     
     // Trig functions with float
     float sin_theta = sin(float(ray.theta));
-    float cos_theta = cos(float(ray.theta));
+    float cos_theta = cos(float(ray.theta)); 
     float sin_phi = sin(float(ray.phi));
     float cos_phi = cos(float(ray.phi));
     
@@ -91,7 +91,7 @@ void geodesic_derivatives(in Ray ray, out double[6] deriv) {
     // d2r
     deriv[3] = - (rad_s / (2.0 * r * r)) * f * (dt_dl * dt_dl)
                + (rad_s / (2.0 * r * r * f)) * (dr * dr)
-               + r * f * (dtheta * dtheta + double(sin_theta * sin_theta) * dphi * dphi);
+               + r * (dtheta * dtheta + double(sin_theta * sin_theta) * dphi * dphi);
     
     // d2phi
     deriv[4] = -2.0 * dr * dphi / r;
@@ -217,7 +217,7 @@ void main() {
 //        ray.z += rayDir.z * c * dt;
 //        ray.r = sqrt(ray.x * ray.x + ray.y * ray.y + ray.z * ray.z);
 
-        ray = rk4_step(ray, 1e7);
+        ray = rk4_step(ray, 1e1);
 
         steps++;
     }

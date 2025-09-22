@@ -1,10 +1,10 @@
 ﻿  3D_sim.cpp
 C:\Users\lenon\Documents\GitHub\BlackHoleSim\BlackHoleSim\3D_sim.cpp(60,17): warning C4244: '=': conversion from 'double' to 'float', possible loss of data
-C:\Users\lenon\Documents\GitHub\BlackHoleSim\BlackHoleSim\3D_sim.cpp(376,38): warning C4244: 'argument': conversion from 'double' to 'float', possible loss of data
+C:\Users\lenon\Documents\GitHub\BlackHoleSim\BlackHoleSim\3D_sim.cpp(384,38): warning C4244: 'argument': conversion from 'double' to 'float', possible loss of data
   Generating code
-  10 of 334 functions ( 3.0%) were compiled, the rest were copied from previous compilation.
+  21 of 287 functions ( 7.3%) were compiled, the rest were copied from previous compilation.
     0 functions were new in current compilation
-    1 functions had inline decision re-evaluated but remain unchanged
+    25 functions had inline decision re-evaluated but remain unchanged
   Finished generating code
   BlackHoleSim.vcxproj -> C:\Users\lenon\Documents\GitHub\BlackHoleSim\x64\Release\BlackHoleSim.exe
   'pwsh.exe' is not recognized as an internal or external command,
