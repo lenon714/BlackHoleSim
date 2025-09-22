@@ -23,7 +23,7 @@ using Clock = std::chrono::high_resolution_clock;
 
 const double G = 6.67e-11;
 const double c = 299792458.0;
-const float EPSILON = 1e-10;
+const double EPSILON = 1e-10;
 
 struct Ray {
     // Cartesian Coordinates
@@ -104,17 +104,24 @@ struct Engine {
     GLFWwindow* window;
     int HEIGHT = 750;
     int WIDTH = 1000;
+    int COMPUTE_HEIGHT = 600;
+	int COMPUTE_WIDTH = 800;
     double width = 1e11;
     double height = 7.5e10;
 
-	GLuint computeShader;
-    GLuint rayBuffer;
+    GLuint quadVAO;
+    GLuint texture;
+	GLuint computeShader = 0;
+    GLuint shaderProgram;
 
     Engine() {
         if (!glfwInit()) {
             std::cerr << "Failed to initialize GLFW" << std::endl;
             exit(EXIT_FAILURE);
         }
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
         window = glfwCreateWindow(WIDTH, HEIGHT, "Black Hole Simulator", NULL, NULL);
         if (!window) {
             std::cerr << "Failed to create GLFW window" << std::endl;
@@ -127,23 +134,131 @@ struct Engine {
             std::cerr << "GLEW initialization failed: " << glewGetErrorString(err) << std::endl;
             exit(EXIT_FAILURE);
         }
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 
         std::cout << "Viewport: " << width << " x " << height << " meters" << std::endl;
+
+        this->shaderProgram = CreateShaderProgram();
+        this->computeShader = loadShaders();
+
+        auto result = QuadVAO();
+        this->quadVAO = result[0];
+        this->texture = result[1];
+    }
+    
+    GLuint CreateShaderProgram() {
+        const char* vertexShaderSource = R"(
+        #version 430 core
+        layout (location = 0) in vec2 aPos;  // Changed to vec2
+        layout (location = 1) in vec2 aTexCoord;
+        out vec2 TexCoord;
+        void main() {
+            gl_Position = vec4(aPos, 0.0, 1.0);  // Explicit z=0
+            TexCoord = aTexCoord;
+        })";
+
+        const char* fragmentShaderSource = R"(
+        #version 430 core
+        in vec2 TexCoord;
+        out vec4 FragColor;
+        uniform sampler2D screenTexture;
+        void main() {
+            FragColor = texture(screenTexture, TexCoord);
+        })";
+
+        // vertex shader
+        GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
+        glShaderSource(vertexShader, 1, &vertexShaderSource, nullptr);
+        glCompileShader(vertexShader);
+
+        // fragment shader
+        GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+        glShaderSource(fragmentShader, 1, &fragmentShaderSource, nullptr);
+        glCompileShader(fragmentShader);
+
+        GLuint shaderProgram = glCreateProgram();
+        glAttachShader(shaderProgram, vertexShader);
+        glAttachShader(shaderProgram, fragmentShader);
+        glLinkProgram(shaderProgram);
+
+        glDeleteShader(vertexShader);
+        glDeleteShader(fragmentShader);
+
+        return shaderProgram;
+    };
+
+    vector<GLuint> QuadVAO() {
+        float quadVertices[] = {
+            // positions   // texCoords
+            -1.0f,  1.0f,  0.0f, 1.0f,  // top left
+            -1.0f, -1.0f,  0.0f, 0.0f,  // bottom left
+            1.0f, -1.0f,  1.0f, 0.0f,  // bottom right
+
+            -1.0f,  1.0f,  0.0f, 1.0f,  // top left
+            1.0f, -1.0f,  1.0f, 0.0f,  // bottom right
+            1.0f,  1.0f,  1.0f, 1.0f   // top right
+        };
+
+        GLuint VAO, VBO;
+        glGenVertexArrays(1, &VAO);
+        glGenBuffers(1, &VBO);
+
+        glBindVertexArray(VAO);
+        glBindBuffer(GL_ARRAY_BUFFER, VBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(quadVertices), quadVertices, GL_STATIC_DRAW);
+
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+
+        GLuint texture;
+        glGenTextures(1, &texture);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+        glTexImage2D(GL_TEXTURE_2D,
+            0,             // mip
+            GL_RGBA32F,      // internal format
+            COMPUTE_WIDTH,
+            COMPUTE_HEIGHT,
+            0,
+            GL_RGBA,
+            GL_FLOAT,
+            nullptr);
+
+        glBindImageTexture(0, texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+
+        vector<GLuint> VAOtexture = { VAO, texture };
+        return VAOtexture;
     }
 
-    void start() {
-        glClear(GL_COLOR_BUFFER_BIT);
-        glMatrixMode(GL_PROJECTION);
-        glLoadIdentity();
-        double left = -width;
-        double right = width;
-        double bottom = -height;
-        double top = height;
-        glOrtho(left, right, bottom, top, -1, 1);
-        glMatrixMode(GL_MODELVIEW);
-        glLoadIdentity();
-    }
+    void renderScene(float rad_s) {
+        glUseProgram(computeShader);
+
+        glUniform1d(glGetUniformLocation(computeShader, "rad_s"), rad_s);
+
+        int workGroupsX = (COMPUTE_WIDTH + 15) / 16;
+        int workGroupsY = (COMPUTE_HEIGHT + 15) / 16;
+        int workGroupsZ = 1;
+        glDispatchCompute(workGroupsX, workGroupsY, workGroupsZ);
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+        // clear screen and draw textured quad
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glUseProgram(shaderProgram);
+
+        glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, texture);
+        GLint textureLocation = glGetUniformLocation(shaderProgram, "screenTexture");
+        glUniform1i(textureLocation, 0);
+
+        glBindVertexArray(quadVAO);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+    };
 
     string loadShaderSource(const char* filepath) {
         ifstream file(filepath);
@@ -157,7 +272,7 @@ struct Engine {
         return buffer.str();
     }
 
-    void loadShaders() {
+    GLuint loadShaders() {
         // Load compute shader
         string computeSource = loadShaderSource("geodesic.comp");
         const char* source = computeSource.c_str();
@@ -174,7 +289,7 @@ struct Engine {
         if (!success) {
             glGetShaderInfoLog(computeShader, 512, NULL, infoLog);
             std::cerr << "Compute shader compilation failed:\n" << infoLog << std::endl;
-            return;
+            return 0;
         }
 
         // Create and link program
@@ -187,31 +302,12 @@ struct Engine {
         if (!success) {
             glGetProgramInfoLog(computeProgram, 512, NULL, infoLog);
             std::cerr << "Program linking failed:\n" << infoLog << std::endl;
-            return;
+            return 0;
         }
         computeShader = computeProgram; // Store program ID for later use
-    }
 
-    void createBuffers(vector<Ray> rays) {
-        // Create and bind ray buffer
-        glGenBuffers(1, &rayBuffer);
-        glBindBuffer(GL_SHADER_STORAGE_BUFFER, rayBuffer);
-        glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(Ray) * rays.size(), rays.data(), GL_DYNAMIC_DRAW);
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, rayBuffer);
-        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+		return computeProgram;
     }
-
-    void runComputeShader(GLuint computeShader, vector<Ray> rays) {
-        int workGroupsX = ceil((rays.size()) / 256.0);
-        int workGroupsY = 1;
-        int workGroupsZ = 1;
-        glDispatchCompute(workGroupsX, workGroupsY, workGroupsZ);
-		glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-    }
-
-    void deleteShaders() {
-        glDeleteProgram(computeShader);
-	}
 };
 
 Engine engine;
@@ -219,7 +315,7 @@ Engine engine;
 struct BlackHole {
     vec2 pos;
     double m;
-    float rad_s;
+    double rad_s;
 
     BlackHole(vec3 position, double mass) : pos(position), m(mass) {
         rad_s = (2.0 * G * mass) / (c * c);
@@ -254,54 +350,31 @@ struct BlackHole {
     }
 };
 
-BlackHole blackhole1(vec3(0, 0, 0), 8.0e36);
+BlackHole blackhole1(vec3(0, 0, 0), 2.0e31);
+
+struct Camera {
+    vec3 position;
+    vec3 direction;
+    float fov;
+
+    Camera(vec3 pos, vec3 dir, float fieldOfView) : position(pos), direction(dir), fov(fieldOfView) {}
+};
+
+Camera camera(vec3(0, 0, 1e11), vec3(0, 0, -1), 60.0f);
 
 int main() {
-    float v0 = c;
-    for (float y = -engine.height; y < engine.height; y += 0.2e10) {
-        rays.push_back(Ray(vec3(-engine.width, y, 0.0), vec3(v0, 0.0, 0.0), blackhole1.rad_s));
-        trails.push_back(Trail());
-        rays.push_back(Ray(vec3(engine.width, y, 0.0), vec3(-v0, 0.0, 0.0), blackhole1.rad_s));
-        trails.push_back(Trail());
-    }
-
     cout << "Initialized " << rays.size() << " rays." << endl;
-	cout << ceil(rays.size() / 16.0) << " work groups will be dispatched per frame." << endl;
-
-    engine.loadShaders();
-    engine.createBuffers(rays);
-	glUseProgram(engine.computeShader);
-    glUniform1f(glGetUniformLocation(engine.computeShader, "rad_s"), blackhole1.rad_s);
+	cout << ceil(rays.size() / 16.0) << " work groups will be dispatched per frame." << endl;    
 
     std::cout << "Starting Black Hole Simulator..." << std::endl;
 
-    engine.start();
+    vector<unsigned char> pixels(engine.COMPUTE_WIDTH * engine.COMPUTE_HEIGHT * 3);
+
+    cout << blackhole1.rad_s << endl;
 
     while (!glfwWindowShouldClose(engine.window)) {
-		glClear(GL_COLOR_BUFFER_BIT);
-        engine.runComputeShader(engine.computeShader, rays);
-
-        glMemoryBarrier(GL_ALL_BARRIER_BITS);
-        glBindBuffer(GL_SHADER_STORAGE_BUFFER, engine.rayBuffer);
-		glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(Ray) * rays.size(), rays.data());
-		glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-
-        for (size_t i = 0; i < rays.size(); ++i) {
-            trails[i].update(rays[i]);
-        }
-
-        blackhole1.draw();
-
-        // Draw rays and their trails
-        for (size_t i = 0; i < rays.size(); ++i) {
-            rays[i].draw();
-            trails[i].draw();
-        }
-
-        glfwSwapBuffers(engine.window);
-        glfwPollEvents();
+        engine.renderScene(blackhole1.rad_s);
     }
-    glDeleteBuffers(1, &engine.rayBuffer);
     glDeleteProgram(engine.computeShader);
     glfwTerminate();
 

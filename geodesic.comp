@@ -1,37 +1,87 @@
-#version 450 core
+#version 430 core
 
-uniform float rad_s;
+uniform double rad_s;
 
-const float EPSILON = 1e-10;
-const int MAX_TRAIL_SIZE = 10;
+const double EPSILON = 1e-10;
+const int MAX_STEPS = 10000;
+const double c = 299792458.0; // Speed of light in m/s
 
-layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+const int HEIGHT = 750;
+const int WIDTH = 1000;
+const int COMPUTE_HEIGHT = 600;
+const int COMPUTE_WIDTH = 800;
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 struct Ray {
-    float x, y, z;
-    float r, phi, theta;
-    float dr, dphi, dtheta;
-    float E, L, f, dt_dl;
+    double x, y, z;
+    double r, phi, theta;
+    double dr, dphi, dtheta;
+    double E, L, f, dt_dl;
 };
 
-layout(std430, binding = 0) buffer RayBuffer {
-    Ray rays[];
-};
+Ray initRay(dvec3 position, dvec3 dir, double rad_s) {
+    Ray ray;
+    ray.x = position.x;
+    ray.y = position.y;
+    ray.z = position.z;
+    
+    // Use doubles for the large-scale calculation
+    ray.r = sqrt(ray.x * ray.x + ray.y * ray.y + ray.z * ray.z);
+    
+    // Cast to float for trig functions, then back to double
+    ray.phi = double(atan(float(ray.y), float(ray.x)));
+    ray.theta = double(acos(float(ray.z / ray.r)));
+    
+    // Trig functions with float
+    float sin_theta = sin(float(ray.theta));
+    float cos_theta = cos(float(ray.theta));
+    float sin_phi = sin(float(ray.phi));
+    float cos_phi = cos(float(ray.phi));
+    
+    // Back to doubles for velocity calculations
+    ray.dr = dir.x * double(sin_theta * cos_phi) +
+             dir.y * double(sin_theta * sin_phi) +
+             dir.z * double(cos_theta);
+    
+    // Continue with mixed precision...
+    ray.dtheta = (dir.x * double(cos_theta * cos_phi) +
+                  dir.y * double(cos_theta * sin_phi) -
+                  dir.z * double(sin_theta)) / ray.r;
+    
+    if (abs(sin_theta) < EPSILON) {
+        ray.dphi = 0.0;
+    } else {
+        ray.dphi = (-dir.x * double(sin_phi) + dir.y * double(cos_phi)) / 
+                   (ray.r * double(sin_theta));
+    }
+    
+    ray.L = ray.r * ray.r * double(sin_theta) * ray.dphi;
+    ray.f = 1.0 - rad_s / ray.r;
+    ray.dt_dl = sqrt((ray.dr * ray.dr) / ray.f + 
+                     ray.r * ray.r * (ray.dtheta * ray.dtheta + 
+                     double(sin_theta * sin_theta) * ray.dphi * ray.dphi));
+    ray.E = ray.f * ray.dt_dl;
+    
+    return ray;
+}
+
+layout(rgba32f, binding = 0) writeonly uniform image2D outputImage;
 
 // Simplified geodesic function that just computes derivatives
-void geodesic_derivatives(in Ray ray, float rad_s, out float[6] deriv) {
-    float r = ray.r;
-    float theta = ray.theta;
-    float dr = ray.dr;
-    float dphi = ray.dphi;
-    float dtheta = ray.dtheta;
+void geodesic_derivatives(in Ray ray, out double[6] deriv) {
+    double r = ray.r;
+    double theta = ray.theta;
+    double dr = ray.dr;
+    double dphi = ray.dphi;
+    double dtheta = ray.dtheta;
     
-    float sin_theta = sin(theta);
-    float cos_theta = cos(theta);
+    float sin_theta = sin(float(ray.theta));
+    float cos_theta = cos(float(ray.theta));
     
-    float f = 1.0 - rad_s / r;
-    float E = ray.E;
-    float dt_dl = E / f;
+    double f = 1.0 - rad_s / r;
+    double E = ray.E;
+    double dt_dl = E / f;
     
     // First derivatives (velocities)
     deriv[0] = dr;
@@ -42,24 +92,24 @@ void geodesic_derivatives(in Ray ray, float rad_s, out float[6] deriv) {
     // d2r
     deriv[3] = - (rad_s / (2.0 * r * r)) * f * (dt_dl * dt_dl)
                + (rad_s / (2.0 * r * r * f)) * (dr * dr)
-               + r * f * (dtheta * dtheta + sin_theta * sin_theta * dphi * dphi);
+               + r * f * (dtheta * dtheta + double(sin_theta * sin_theta) * dphi * dphi);
     
     // d2phi
     deriv[4] = -2.0 * dr * dphi / r 
-               - 2.0 * (cos_theta / sin_theta) * dtheta * dphi ;
+               - 2.0 * double((cos_theta / sin_theta)) * dtheta * dphi ;
 
     // d2theta
     deriv[5] = -2.0 * dr * dtheta / r 
-               + sin_theta * cos_theta * dphi * dphi;
+               + double(sin_theta * cos_theta) * dphi * dphi;
 }
 
-Ray rk4_step(Ray ray, float rad_s, float dl) {
+Ray rk4_step(Ray ray, double dl) {
     // Store initial state
-    float y0[6] = { ray.r, ray.phi, ray.theta, ray.dr, ray.dphi, ray.dtheta };
-    float k1[6], k2[6], k3[6], k4[6];
+    double y0[6] = { ray.r, ray.phi, ray.theta, ray.dr, ray.dphi, ray.dtheta };
+    double k1[6], k2[6], k3[6], k4[6];
     
     // k1 - derivatives at initial point
-    geodesic_derivatives(ray, rad_s, k1);
+    geodesic_derivatives(ray, k1);
     
     // k2 - derivatives at midpoint using k1
     Ray ray2 = ray;
@@ -69,7 +119,7 @@ Ray rk4_step(Ray ray, float rad_s, float dl) {
     ray2.dr = y0[3] + 0.5 * dl * k1[3];
     ray2.dphi = y0[4] + 0.5 * dl * k1[4];
     ray2.dtheta = y0[5] + 0.5 * dl * k1[5];
-    geodesic_derivatives(ray2, rad_s, k2);
+    geodesic_derivatives(ray2, k2);
     
     // k3 - derivatives at midpoint using k2
     Ray ray3 = ray;
@@ -79,7 +129,7 @@ Ray rk4_step(Ray ray, float rad_s, float dl) {
     ray3.dr = y0[3] + 0.5 * dl * k2[3];
     ray3.dphi = y0[4] + 0.5 * dl * k2[4];
     ray3.dtheta = y0[5] + 0.5 * dl * k2[5];
-    geodesic_derivatives(ray3, rad_s, k3);
+    geodesic_derivatives(ray3, k3);
     
     // k4 - derivatives at endpoint using k3
     Ray ray4 = ray;
@@ -89,7 +139,7 @@ Ray rk4_step(Ray ray, float rad_s, float dl) {
     ray4.dr = y0[3] + dl * k3[3];
     ray4.dphi = y0[4] + dl * k3[4];
     ray4.dtheta = y0[5] + dl * k3[5];
-    geodesic_derivatives(ray4, rad_s, k4);
+    geodesic_derivatives(ray4, k4);
     
     // Combine with RK4 weights
     ray.r = y0[0] + (dl / 6.0) * (k1[0] + 2.0 * k2[0] + 2.0 * k3[0] + k4[0]);
@@ -100,56 +150,53 @@ Ray rk4_step(Ray ray, float rad_s, float dl) {
     ray.dtheta = y0[5] + (dl / 6.0) * (k1[5] + 2.0 * k2[5] + 2.0 * k3[5] + k4[5]);
 
     // Update Cartesian coordinates
-    float sin_theta = sin(ray.theta);
-    float cos_theta = cos(ray.theta);
-    float sin_phi = sin(ray.phi);
-    float cos_phi = cos(ray.phi);
-    
-    ray.x = ray.r * sin_theta * cos_phi;
-    ray.y = ray.r * sin_theta * sin_phi;
-    ray.z = ray.r * cos_theta;
+    double sin_theta = sin(float(ray.theta));
+    double cos_theta = cos(float(ray.theta));
+    double sin_phi = sin(float(ray.phi));
+    double cos_phi = cos(float(ray.phi));
 
-    return ray;
-}
-
-Ray euler_step(Ray ray, float rad_s, float dl){
-    float deriv[6];
-    geodesic_derivatives(ray, rad_s, deriv);
-    
-    ray.r += dl * deriv[0];
-    ray.phi += dl * deriv[1];
-    ray.theta += dl * deriv[2];
-    ray.dr += dl * deriv[3];
-    ray.dphi += dl * deriv[4];
-    ray.dtheta += dl * deriv[5];
-
-    // Update Cartesian coordinates
-    float sin_theta = sin(ray.theta);
-    float cos_theta = cos(ray.theta);
-    float sin_phi = sin(ray.phi);
-    float cos_phi = cos(ray.phi);
-    
-    ray.x = ray.r * sin_theta * cos_phi;
-    ray.y = ray.r * sin_theta * sin_phi;
-    ray.z = ray.r * cos_theta;
+    ray.x = ray.r * double(sin_theta * cos_phi);
+    ray.y = ray.r * double(sin_theta * sin_phi);
+    ray.z = ray.r * double(cos_theta);
 
     return ray;
 }
 
 void main() {
-    uint idx = gl_GlobalInvocationID.x;
-    if (idx >= rays.length()) return;
-    
-    Ray ray = rays[idx];
-    
-    // Skip if captured
-    if (ray.r <= rad_s) {
-        ray.r = rad_s; 
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 imgSize = imageSize(outputImage);
+    if (pixel.x >= imgSize.x || pixel.y >= imgSize.y)
         return;
-    }
     
-    // Use a fraction of the Schwarzschild radius
-    float dl = 3e-1;
+    float u = (float(pixel.x) / float(imgSize.x)) * 2.0 - 1.0;
+    float v = (float(pixel.y) / float(imgSize.y)) * 2.0 - 1.0;
+    
+    // Move camera much farther away
+    float cameraDistance = 1e8;
+    vec3 cameraPos = vec3(0, 0, cameraDistance);
+    
+    vec3 rayDir;
+    float aspectRatio = float(imgSize.x) / float(imgSize.y);
+    float tanHalfFov = tan(radians(60.0) / 2.0);
+    rayDir.x = u * aspectRatio * tanHalfFov;
+    rayDir.y = v * tanHalfFov;
+    rayDir.z = -1.0;
+    rayDir = normalize(rayDir);
+    
+    Ray ray = initRay(cameraPos, rayDir, rad_s);
+    
+    vec4 color = vec4(0.0, 0.0, 0.2, 1.0); // Space
+    
+    for (int i = 0; i < 1000; i++) {
+        if (ray.r <= rad_s * 1.01) {  // Just outside event horizon
+            color = vec4(1.0, 0.0, 0.0, 1.0);
+            break;
+        }
+        if (ray.r > cameraDistance * 2.0) {  // Escaped
+            break;
+        }
+        ray = rk4_step(ray, 0.01);
+    }
 
-    rays[idx] = euler_step(ray, rad_s, dl);
+    imageStore(outputImage, pixel, color);
 }
