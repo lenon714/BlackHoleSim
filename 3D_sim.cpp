@@ -21,9 +21,9 @@ using namespace glm;
 using namespace std;
 using Clock = std::chrono::high_resolution_clock;
 
-const double G = 6.67e-11;
-const double c = 299792458.0;
-const double EPSILON = 1e-10;
+const float G = 6.67e-11;
+const float c = 299792458.0;
+const float EPSILON = 1e-10;
 
 struct Ray {
     // Cartesian Coordinates
@@ -33,7 +33,7 @@ struct Ray {
     float dr, dphi, dtheta;
     float E, L, f, dt_dl;
 
-    Ray(vec3 position, vec3 dir, double rad_s) : x(position.x), y(position.y), z(position.z) {
+    Ray(vec3 position, vec3 dir, float rad_s) : x(position.x), y(position.y), z(position.z) {
         r = sqrt(x * x + y * y + z * z);
 
         phi = atan(y, x);
@@ -313,7 +313,7 @@ Engine engine;
 struct BlackHole {
     vec2 pos;
     double m;
-    double rad_s;
+    float rad_s;
 
     BlackHole(vec3 position, double mass) : pos(position), m(mass) {
         rad_s = (2.0 * G * mass) / (c * c);
@@ -368,15 +368,13 @@ int main() {
 
     std::cout << "Starting Black Hole Simulator..." << std::endl;
 
-    cout << "Swartzschild Radius: " << blackhole1.rad_s << endl;
-
-	double* rays = new double[num_rays]();
+	float* rays = new float[num_rays]();
 
     GLuint rayBuffer;
 
     glGenBuffers(1, &rayBuffer);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, rayBuffer);
-    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(double) * num_rays, rays, GL_DYNAMIC_DRAW);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(float) * num_rays, rays, GL_DYNAMIC_DRAW);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, rayBuffer);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
@@ -386,7 +384,7 @@ int main() {
         glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
         
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, rayBuffer);
-        double* mappedRays = (double*)glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_READ_ONLY);
+        float* mappedRays = (float*)glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_READ_ONLY);
 
         int centerX = engine.COMPUTE_WIDTH / 2;
         int centerY = engine.COMPUTE_HEIGHT / 2;
@@ -397,12 +395,6 @@ int main() {
             glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
         }
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-        /*glBindBuffer(GL_SHADER_STORAGE_BUFFER, rayBuffer);
-        glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(double) * num_rays, rays);
-        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);*/
-
-        //int i = 60000;
-	    //cout << rays[i] << endl;
     }
     glDeleteProgram(engine.computeShader);
     glfwTerminate();
