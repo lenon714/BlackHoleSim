@@ -25,79 +25,6 @@ const float G = 6.67e-11;
 const float c = 299792458.0;
 const float EPSILON = 1e-10;
 
-struct Ray {
-    // Cartesian Coordinates
-    float x, y, z;
-    // Polar Coordinates
-    float r, phi, theta;
-    float dr, dphi, dtheta;
-    float E, L, f, dt_dl;
-
-    Ray(vec3 position, vec3 dir, float rad_s) : x(position.x), y(position.y), z(position.z) {
-        r = sqrt(x * x + y * y + z * z);
-
-        phi = atan(y, x);
-
-        theta = acos(z / r);
-
-        // Calculate trig functions once
-        float sin_theta = sin(theta);
-        float cos_theta = cos(theta);
-        float sin_phi = sin(phi);
-        float cos_phi = cos(phi);
-
-        dr = dir.x * sin_theta * cos_phi +
-             dir.y * sin_theta * sin_phi +
-             dir.z * cos_theta;
-
-        dtheta = (dir.x * cos_theta * cos_phi +
-                  dir.y * cos_theta * sin_phi -
-                  dir.z * sin_theta) / r;
-
-        dphi = (-dir.x * sin_phi + dir.y * cos_phi) / (r * sin_theta);
-
-        L = r * r * sin(theta) * dphi;
-        f = 1.0 - rad_s / r;
-        dt_dl = sqrt((dr * dr) / f + r * r * (dtheta * dtheta + sin(theta) * sin(theta) * dphi * dphi));
-        E = f * dt_dl;
-    }
-
-    void draw() {
-        glPointSize(2.0f);
-        glColor3f(1.0f, 1.0f, 1.0f);
-        glBegin(GL_POINTS);
-        glVertex2f(x, y);
-        glEnd();
-    }
-};
-
-struct Trail {
-	vector<vec2> trail;
-
-    Trail() {}
-
-    void update(Ray& ray) {
-		trail.push_back(vec2(ray.x, ray.y));
-	}
-    void draw() {
-        if (trail.size() < 2) return;
-
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glLineWidth(1.5f);
-
-        glBegin(GL_LINE_STRIP);
-        for (size_t i = 0; i < trail.size(); ++i) {
-            float alpha = float(i) / float(trail.size() - 1);
-            glColor4f(1.0f, 1.0f, 1.0f, alpha);
-            glVertex2f(trail[i].x, trail[i].y);
-        }
-        glEnd();
-    }
-};
-
-vector<Trail> trails;
-
 struct Engine {
     GLFWwindow* window;
     int HEIGHT = 750;
@@ -234,7 +161,9 @@ struct Engine {
     void renderScene(float rad_s) {
         glUseProgram(computeShader);
 
-        glUniform1d(glGetUniformLocation(computeShader, "rad_s"), rad_s);
+        glUniform1f(glGetUniformLocation(computeShader, "rad_s"), rad_s);
+        glUniform1i(glGetUniformLocation(computeShader, "COMPUTE_WIDTH"), COMPUTE_WIDTH);
+        glUniform1i(glGetUniformLocation(computeShader, "COMPUTE_HEIGHT"), COMPUTE_HEIGHT);
 
         int workGroupsX = (COMPUTE_WIDTH + 15) / 16;
         int workGroupsY = (COMPUTE_HEIGHT + 15) / 16;
@@ -306,6 +235,93 @@ struct Engine {
 
 		return computeProgram;
     }
+    void generateGrid(const vector<ObjectData>& objects) {
+        const int gridSize = 25;
+        const float spacing = 1e10f;  // tweak this
+
+        vector<vec3> vertices;
+        vector<GLuint> indices;
+
+        for (int z = 0; z <= gridSize; ++z) {
+            for (int x = 0; x <= gridSize; ++x) {
+                float worldX = (x - gridSize / 2) * spacing;
+                float worldZ = (z - gridSize / 2) * spacing;
+
+                float y = 0.0f;
+
+                // ✅ Warp grid using Schwarzschild geometry
+                for (const auto& obj : objects) {
+                    vec3 objPos = vec3(obj.posRadius);
+                    double mass = obj.mass;
+                    double radius = obj.posRadius.w;
+
+                    double r_s = 2.0 * G * mass / (c * c);
+                    double dx = worldX - objPos.x;
+                    double dz = worldZ - objPos.z;
+                    double dist = sqrt(dx * dx + dz * dz);
+
+                    // prevent sqrt of negative or divide-by-zero (inside or at the black hole center)
+                    if (dist > r_s) {
+                        double deltaY = 2.0 * sqrt(r_s * (dist - r_s));
+                        y += static_cast<float>(deltaY) - 3e10f;
+                    }
+                    else {
+                        // 🔴 For points inside or at r_s: make it dip down sharply
+                        y += 2.0f * static_cast<float>(sqrt(r_s * r_s)) - 3e10f;  // or add a deep pit
+                    }
+                }
+
+                vertices.emplace_back(worldX, y, worldZ);
+            }
+        }
+
+        // 🧩 Add indices for GL_LINE rendering
+        for (int z = 0; z < gridSize; ++z) {
+            for (int x = 0; x < gridSize; ++x) {
+                int i = z * (gridSize + 1) + x;
+                indices.push_back(i);
+                indices.push_back(i + 1);
+
+                indices.push_back(i);
+                indices.push_back(i + gridSize + 1);
+            }
+        }
+
+        // 🔌 Upload to GPU
+        if (gridVAO == 0) glGenVertexArrays(1, &gridVAO);
+        if (gridVBO == 0) glGenBuffers(1, &gridVBO);
+        if (gridEBO == 0) glGenBuffers(1, &gridEBO);
+
+        glBindVertexArray(gridVAO);
+
+        glBindBuffer(GL_ARRAY_BUFFER, gridVBO);
+        glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(vec3), vertices.data(), GL_DYNAMIC_DRAW);
+
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gridEBO);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(GLuint), indices.data(), GL_STATIC_DRAW);
+
+        glEnableVertexAttribArray(0); // location = 0
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(vec3), (void*)0);
+
+        gridIndexCount = indices.size();
+
+        glBindVertexArray(0);
+    }
+    void drawGrid(const mat4& viewProj) {
+        glUseProgram(gridShaderProgram);
+        glUniformMatrix4fv(glGetUniformLocation(gridShaderProgram, "viewProj"),
+            1, GL_FALSE, glm::value_ptr(viewProj));
+        glBindVertexArray(gridVAO);
+
+        glDisable(GL_DEPTH_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        glDrawElements(GL_LINES, gridIndexCount, GL_UNSIGNED_INT, 0);
+
+        glBindVertexArray(0);
+        glEnable(GL_DEPTH_TEST);
+    }
 };
 
 Engine engine;
@@ -348,14 +364,26 @@ struct BlackHole {
     }
 };
 
-BlackHole blackhole1(vec3(0, 0, 0), 8.0e36);
+BlackHole blackhole1(vec3(0, 0, 0), 2.0e30);
 
 struct Camera {
-    vec3 position;
-    vec3 direction;
-    float fov;
+    vec3 camPos;
+    vec3 camFoward;
+    vec3 camUp;
+    vec3 camRight;
 
-    Camera(vec3 pos, vec3 dir, float fieldOfView) : position(pos), direction(dir), fov(fieldOfView) {}
+    Camera(vec3 pos, vec3 dir, float fieldOfView) : camPos(pos) {
+        float camDis = 5e4;
+        vec3 cameraPos = vec3(camDis, 0.0, camDis);
+        
+        vec3 target = vec3(0, 0, 0);  // Black hole position
+        vec3 up = vec3(0, 1, 0);      // World up
+
+        // Calculate view direction
+        vec3 camForward = normalize(target - cameraPos);
+        vec3 camRight = normalize(cross(camForward, up));
+        vec3 cameraUp = cross(camRight, camForward);        
+    }
 };
 
 Camera camera(vec3(0, 0, 1e11), vec3(0, 0, -1), 60.0f);
@@ -391,7 +419,7 @@ int main() {
         int centerIndex = centerY * engine.COMPUTE_WIDTH + centerX;
 
         if (mappedRays) {
-            cout << mappedRays[centerIndex] << endl;
+            //cout << mappedRays[centerIndex] << endl;
             glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
         }
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);

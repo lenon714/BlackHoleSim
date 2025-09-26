@@ -1,15 +1,15 @@
 #version 430 core
 
 uniform float rad_s;
+uniform int COMPUTE_HEIGHT;
+uniform int COMPUTE_WIDTH;
 
 const float EPSILON = 1e-10;
-const int MAX_STEPS = 80000;
+const int MAX_STEPS = 100000;
 const float c = 299792458.0; // Speed of light in m/s
 
 const int HEIGHT = 750;
 const int WIDTH = 1000;
-const int COMPUTE_HEIGHT = 150;
-const int COMPUTE_WIDTH = 200;
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
@@ -20,7 +20,7 @@ struct Ray {
     float E, L, f, dt_dl;
 };
 
-Ray initRay(vec3 position, vec3 dir, float rad_s) {
+Ray initRay(vec3 position, vec3 dir) {
     Ray ray;
     ray.x = position.x;
     ray.y = position.y;
@@ -57,8 +57,7 @@ Ray initRay(vec3 position, vec3 dir, float rad_s) {
                      ray.r * ray.r * (ray.dtheta * ray.dtheta + 
                      sin_theta * sin_theta * ray.dphi * ray.dphi));
     ray.E = ray.f * ray.dt_dl;
-    
-    ray.r = 12345;
+
     return ray;
 }
 
@@ -68,16 +67,19 @@ layout(std430, binding = 1) buffer RayBuffer {
     float rays[];
 };
 
+layout(std140, binding = 2) uniform CamBuffer {
+    vec3 camPos;
+    vec3 camFwd;
+    vec3 camUp;
+    vec3 camRight;
+};
+
 // Simplified geodesic function that just computes derivatives
 void geodesic_derivatives(in Ray ray, out float[6] deriv) {
-    float r = ray.r;
-    float theta = ray.theta;
-    float dr = ray.dr;
-    float dphi = ray.dphi;
-    float dtheta = ray.dtheta;
+    float r = ray.r, theta = ray.theta;
+    float dr = ray.dr, dphi = ray.dphi, dtheta = ray.dtheta;
     
-    float sin_theta = sin(ray.theta);
-    float cos_theta = cos(ray.theta);
+    float sin_theta = sin(ray.theta), cos_theta = cos(ray.theta);
     
     float f = 1.0 - rad_s / r;
     float E = ray.E;
@@ -103,7 +105,7 @@ void geodesic_derivatives(in Ray ray, out float[6] deriv) {
                + sin_theta * cos_theta * dphi * dphi;
 }
 
-Ray rk4_step(Ray ray, float dl) {
+Ray rk4_step(inout Ray ray, float dl) {
     // Store initial state
     float y0[6] = { ray.r, ray.phi, ray.theta, ray.dr, ray.dphi, ray.dtheta };
     float k1[6], k2[6], k3[6], k4[6];
@@ -162,51 +164,74 @@ Ray rk4_step(Ray ray, float dl) {
     return ray;
 }
 
+Ray euler_step( inout Ray ray, float dl) {
+    float deriv[6];
+    geodesic_derivatives(ray, deriv);
+    
+    ray.r += deriv[0] * dl;
+    ray.phi += deriv[1] * dl;
+    ray.theta += deriv[2] * dl;
+    ray.dr += deriv[3] * dl;
+    ray.dphi += deriv[4] * dl;
+    ray.dtheta += deriv[5] * dl;
+
+    // Update Cartesian coordinates
+    float sin_theta = sin(ray.theta);
+    float cos_theta = cos(ray.theta);
+    float sin_phi = sin(ray.phi);
+    float cos_phi = cos(ray.phi);
+    ray.x = ray.r * sin_theta * cos_phi;
+    ray.y = ray.r * sin_theta * sin_phi;
+    ray.z = ray.r * cos_theta;
+
+    return ray;
+}
+
+bool check_planet(Ray ray, vec3 planetPos, float planetRadius) {
+    vec3 rayPos = vec3(ray.x, ray.y, ray.z);
+    float dist = length(rayPos - planetPos);
+    return dist <= planetRadius;
+}
+
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     ivec2 imgSize = imageSize(outputImage);
     if (pixel.x >= imgSize.x || pixel.y >= imgSize.y)
         return;
 
-    float u = (float(pixel.x) / float(imgSize.x)) * 2.0 - 1.0;
-    float v = (float(pixel.y) / float(imgSize.y)) * 2.0 - 1.0;
-    
-    // Move camera much farther away
-    float cameraDistance = 1.1e12;
-    vec3 cameraPos = vec3(cameraDistance, 0.0, cameraDistance);
+    float u = (2.0 * (pixel.x + 0.5) / COMPUTE_WIDTH - 1.0);
+    float v = (1.0 - 2.0 * (pixel.y + 0.5) / COMPUTE_HEIGHT);
 
-    vec3 target = vec3(0, 0, 0);  // Black hole position
-    vec3 up = vec3(0, 1, 0);      // World up
-    
-    // Calculate view direction
-    vec3 forward = normalize(target - cameraPos);
-    vec3 right = normalize(cross(forward, up));
-    vec3 cameraUp = cross(right, forward);
+    vec3 planet_pos = vec3(-1.5e5, 0, 0); // 1 AU in meters
+    float planet_rad = 5e3; // 10x Earth's radius in meters
     
     vec3 rayDir;
     float aspectRatio = float(imgSize.x) / float(imgSize.y);
     float tanHalfFov = tan(radians(60.0) / 2.0);
 
-    rayDir = normalize(right * (u * aspectRatio * tanHalfFov) + cameraUp * (v * tanHalfFov) + forward);
+    rayDir = normalize(camRight * (u * aspectRatio * tanHalfFov) + camUp * (v * tanHalfFov) + camFwd);
     
-    Ray ray = initRay(cameraPos, rayDir, rad_s);
-    
-    float r0 = ray.r;
+    Ray ray = initRay(camPos, rayDir);
 
-    vec4 color = vec4(1.0, 0.0, 0.0, 1.0); // Space
+    vec4 color = vec4(0.0, 0.0, 0.0, 1.0); // Space
     
     uint steps = 0;
-    while (steps < 0){
-        if (ray.r <= rad_s * 1.01) {  // Just outside event horizon
-            color = vec4(0.0, 1.0, 0.0, 1.0);
+    while (steps < MAX_STEPS){
+
+        if (ray.r <= rad_s) {  // Just outside event horizon
+            color = vec4(0.0, 0.0, 1.0, 1.0);
             break;
         }
+//        else if (check_planet(ray, planet_pos, planet_rad)) { // Planet at 1 AU with 10x Earth's radius
+//            color = vec4(1.0, 0.0, 0.0, 1.0); // Planet color
+//            break;
+//        }        
         else if (ray.r > 1e30) { // Far distance
-            color = vec4(0.0, 0.0, 0.2, 1.0);
+//            color = vec4(0.0, 0.0, 0.1, 1.0);
             break;
         }
 
-        ray = rk4_step(ray, ray.r*1e-2);
+        ray = euler_step(ray, ray.r*0.01);
 
         steps++;
     }
