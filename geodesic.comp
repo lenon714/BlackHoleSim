@@ -4,6 +4,11 @@ uniform float rad_s;
 uniform int COMPUTE_HEIGHT;
 uniform int COMPUTE_WIDTH;
 
+uniform vec3 camPos;
+uniform vec3 camFwd;
+uniform vec3 camRight;
+uniform vec3 camUp;
+
 const float EPSILON = 1e-10;
 const int MAX_STEPS = 100000;
 const float c = 299792458.0; // Speed of light in m/s
@@ -38,13 +43,11 @@ Ray initRay(vec3 position, vec3 dir) {
     float cos_theta = cos(ray.theta); 
     float sin_phi = sin(ray.phi);
     float cos_phi = cos(ray.phi);
-    
-    // Back to doubles for velocity calculations
+
     ray.dr = dir.x * sin_theta * cos_phi +
              dir.y * sin_theta * sin_phi +
              dir.z * cos_theta;
     
-    // Continue with mixed precision...
     ray.dtheta = (dir.x * cos_theta * cos_phi +
                   dir.y * cos_theta * sin_phi -
                   dir.z * sin_theta) / ray.r;
@@ -65,13 +68,6 @@ layout(rgba32f, binding = 0) writeonly uniform image2D outputImage;
 
 layout(std430, binding = 1) buffer RayBuffer {
     float rays[];
-};
-
-layout(std140, binding = 2) uniform CamBuffer {
-    vec3 camPos;
-    vec3 camFwd;
-    vec3 camUp;
-    vec3 camRight;
 };
 
 // Simplified geodesic function that just computes derivatives
@@ -205,11 +201,10 @@ void main() {
     vec3 planet_pos = vec3(-1.5e5, 0, 0); // 1 AU in meters
     float planet_rad = 5e3; // 10x Earth's radius in meters
     
-    vec3 rayDir;
     float aspectRatio = float(imgSize.x) / float(imgSize.y);
     float tanHalfFov = tan(radians(60.0) / 2.0);
 
-    rayDir = normalize(camRight * (u * aspectRatio * tanHalfFov) + camUp * (v * tanHalfFov) + camFwd);
+    vec3 rayDir = normalize(camRight * (u * aspectRatio * tanHalfFov) + camUp * (v * tanHalfFov) + camFwd);
     
     Ray ray = initRay(camPos, rayDir);
 
@@ -222,16 +217,16 @@ void main() {
             color = vec4(0.0, 0.0, 1.0, 1.0);
             break;
         }
-//        else if (check_planet(ray, planet_pos, planet_rad)) { // Planet at 1 AU with 10x Earth's radius
-//            color = vec4(1.0, 0.0, 0.0, 1.0); // Planet color
-//            break;
-//        }        
+        else if (check_planet(ray, planet_pos, planet_rad)) { // Planet at 1 AU with 10x Earth's radius
+            color = vec4(1.0, 0.0, 0.0, 1.0); // Planet color
+            break;
+        }        
         else if (ray.r > 1e30) { // Far distance
 //            color = vec4(0.0, 0.0, 0.1, 1.0);
             break;
         }
 
-        ray = euler_step(ray, ray.r*0.01);
+        ray = rk4_step(ray, ray.r * 0.01);
 
         steps++;
     }

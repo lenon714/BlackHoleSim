@@ -158,12 +158,17 @@ struct Engine {
         return VAOtexture;
     }
 
-    void renderScene(float rad_s) {
+    void renderScene(float rad_s, vec3 camPos, vec3 camFwd, vec3 camRight, vec3 camUp) {
         glUseProgram(computeShader);
 
         glUniform1f(glGetUniformLocation(computeShader, "rad_s"), rad_s);
         glUniform1i(glGetUniformLocation(computeShader, "COMPUTE_WIDTH"), COMPUTE_WIDTH);
         glUniform1i(glGetUniformLocation(computeShader, "COMPUTE_HEIGHT"), COMPUTE_HEIGHT);
+
+        glUniform3fv(glGetUniformLocation(computeShader, "camPos"), 1, value_ptr(camPos));
+        glUniform3fv(glGetUniformLocation(computeShader, "camFwd"), 1, value_ptr(camFwd));
+        glUniform3fv(glGetUniformLocation(computeShader, "camRight"), 1, value_ptr(camRight));
+        glUniform3fv(glGetUniformLocation(computeShader, "camUp"), 1, value_ptr(camUp));
 
         int workGroupsX = (COMPUTE_WIDTH + 15) / 16;
         int workGroupsY = (COMPUTE_HEIGHT + 15) / 16;
@@ -235,93 +240,6 @@ struct Engine {
 
 		return computeProgram;
     }
-    void generateGrid(const vector<ObjectData>& objects) {
-        const int gridSize = 25;
-        const float spacing = 1e10f;  // tweak this
-
-        vector<vec3> vertices;
-        vector<GLuint> indices;
-
-        for (int z = 0; z <= gridSize; ++z) {
-            for (int x = 0; x <= gridSize; ++x) {
-                float worldX = (x - gridSize / 2) * spacing;
-                float worldZ = (z - gridSize / 2) * spacing;
-
-                float y = 0.0f;
-
-                // ✅ Warp grid using Schwarzschild geometry
-                for (const auto& obj : objects) {
-                    vec3 objPos = vec3(obj.posRadius);
-                    double mass = obj.mass;
-                    double radius = obj.posRadius.w;
-
-                    double r_s = 2.0 * G * mass / (c * c);
-                    double dx = worldX - objPos.x;
-                    double dz = worldZ - objPos.z;
-                    double dist = sqrt(dx * dx + dz * dz);
-
-                    // prevent sqrt of negative or divide-by-zero (inside or at the black hole center)
-                    if (dist > r_s) {
-                        double deltaY = 2.0 * sqrt(r_s * (dist - r_s));
-                        y += static_cast<float>(deltaY) - 3e10f;
-                    }
-                    else {
-                        // 🔴 For points inside or at r_s: make it dip down sharply
-                        y += 2.0f * static_cast<float>(sqrt(r_s * r_s)) - 3e10f;  // or add a deep pit
-                    }
-                }
-
-                vertices.emplace_back(worldX, y, worldZ);
-            }
-        }
-
-        // 🧩 Add indices for GL_LINE rendering
-        for (int z = 0; z < gridSize; ++z) {
-            for (int x = 0; x < gridSize; ++x) {
-                int i = z * (gridSize + 1) + x;
-                indices.push_back(i);
-                indices.push_back(i + 1);
-
-                indices.push_back(i);
-                indices.push_back(i + gridSize + 1);
-            }
-        }
-
-        // 🔌 Upload to GPU
-        if (gridVAO == 0) glGenVertexArrays(1, &gridVAO);
-        if (gridVBO == 0) glGenBuffers(1, &gridVBO);
-        if (gridEBO == 0) glGenBuffers(1, &gridEBO);
-
-        glBindVertexArray(gridVAO);
-
-        glBindBuffer(GL_ARRAY_BUFFER, gridVBO);
-        glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(vec3), vertices.data(), GL_DYNAMIC_DRAW);
-
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gridEBO);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(GLuint), indices.data(), GL_STATIC_DRAW);
-
-        glEnableVertexAttribArray(0); // location = 0
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(vec3), (void*)0);
-
-        gridIndexCount = indices.size();
-
-        glBindVertexArray(0);
-    }
-    void drawGrid(const mat4& viewProj) {
-        glUseProgram(gridShaderProgram);
-        glUniformMatrix4fv(glGetUniformLocation(gridShaderProgram, "viewProj"),
-            1, GL_FALSE, glm::value_ptr(viewProj));
-        glBindVertexArray(gridVAO);
-
-        glDisable(GL_DEPTH_TEST);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-        glDrawElements(GL_LINES, gridIndexCount, GL_UNSIGNED_INT, 0);
-
-        glBindVertexArray(0);
-        glEnable(GL_DEPTH_TEST);
-    }
 };
 
 Engine engine;
@@ -368,25 +286,47 @@ BlackHole blackhole1(vec3(0, 0, 0), 2.0e30);
 
 struct Camera {
     vec3 camPos;
-    vec3 camFoward;
+    vec3 camFwd;
     vec3 camUp;
     vec3 camRight;
 
-    Camera(vec3 pos, vec3 dir, float fieldOfView) : camPos(pos) {
+    vec3 target = vec3(0, 0, 0);  // Black hole position
+    vec3 up = vec3(0, 1, 0);      // World up
+
+    int numPoints;
+    vector<vec3> track = genTrack(3e4);
+
+    Camera(vec3 pos, vec3 dir, int circlePoints) : camPos(pos), numPoints(circlePoints) {
         float camDis = 5e4;
-        vec3 cameraPos = vec3(camDis, 0.0, camDis);
-        
-        vec3 target = vec3(0, 0, 0);  // Black hole position
-        vec3 up = vec3(0, 1, 0);      // World up
+        camPos = vec3(camDis, 0.0, camDis);
 
         // Calculate view direction
-        vec3 camForward = normalize(target - cameraPos);
-        vec3 camRight = normalize(cross(camForward, up));
-        vec3 cameraUp = cross(camRight, camForward);        
+        camFwd = normalize(target - camPos);
+        camRight = normalize(cross(camFwd, up));
+        camUp = cross(camRight, camFwd);        
+    }
+
+    vector<vec3> genTrack(float camRad) {
+        vector<vec3> track;
+        float angleStep = 2.0f * M_PI / numPoints;
+        for (int i = 0; i < numPoints; i++) {
+            float angle = i * angleStep;
+            float x = camRad * cos(angle);
+            float z = camRad * sin(angle);
+            track.push_back(vec3(x, 0.0f, z));
+        }
+        return track;
+    }
+
+    void rotateCam(int frame) {
+        camPos = track[(frame + 1) % numPoints];
+        camFwd = normalize(target - camPos);
+        camRight = normalize(cross(camFwd, up));
+        camUp = cross(camRight, camFwd);
     }
 };
 
-Camera camera(vec3(0, 0, 1e11), vec3(0, 0, -1), 60.0f);
+Camera cam(vec3(0, 0, 1e11), vec3(0, 0, -1), 1000);
 
 int main() {
     int num_rays = engine.COMPUTE_HEIGHT * engine.COMPUTE_WIDTH;
@@ -406,8 +346,9 @@ int main() {
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, rayBuffer);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
+    int frame = 0;
     while (!glfwWindowShouldClose(engine.window)) {
-        engine.renderScene(blackhole1.rad_s);
+        engine.renderScene(blackhole1.rad_s, cam.camPos, cam.camFwd, cam.camRight, cam.camUp);
 
         glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
         
@@ -423,6 +364,9 @@ int main() {
             glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
         }
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+        cam.rotateCam(frame);
+        frame++;
     }
     glDeleteProgram(engine.computeShader);
     glfwTerminate();
