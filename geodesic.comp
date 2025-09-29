@@ -13,9 +13,6 @@ const float EPSILON = 1e-10;
 const int MAX_STEPS = 100000;
 const float c = 299792458.0; // Speed of light in m/s
 
-const int HEIGHT = 750;
-const int WIDTH = 1000;
-
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 struct Ray {
@@ -66,10 +63,6 @@ Ray initRay(vec3 position, vec3 dir) {
 
 layout(rgba32f, binding = 0) writeonly uniform image2D outputImage;
 
-layout(std430, binding = 1) buffer RayBuffer {
-    float rays[];
-};
-
 // Simplified geodesic function that just computes derivatives
 void geodesic_derivatives(in Ray ray, out float[6] deriv) {
     float r = ray.r, theta = ray.theta;
@@ -93,8 +86,8 @@ void geodesic_derivatives(in Ray ray, out float[6] deriv) {
                + r * (dtheta * dtheta + sin_theta * sin_theta * dphi * dphi);
     
     // d2phi
-    deriv[4] = -2.0 * dr * dphi / r;
-               - 2.0 * (cos_theta / sin_theta) * dtheta * dphi ;
+    deriv[4] = -2.0 * dr * dphi / r
+               - 2.0 * (cos_theta / sin_theta) * dtheta * dphi;
 
     // d2theta
     deriv[5] = -2.0 * dr * dtheta / r 
@@ -198,8 +191,11 @@ void main() {
     float u = (2.0 * (pixel.x + 0.5) / COMPUTE_WIDTH - 1.0);
     float v = (1.0 - 2.0 * (pixel.y + 0.5) / COMPUTE_HEIGHT);
 
-    vec3 planet_pos = vec3(-1.5e5, 0, 0); // 1 AU in meters
-    float planet_rad = 5e3; // 10x Earth's radius in meters
+    vec3 planet1_pos = vec3(-9e4, 0, -1e4);
+    float planet1_rad = 2e4;
+
+    vec3 planet2_pos = vec3(3e4, 4e3, 2e4);
+    float planet2_rad = 5e3;
     
     float aspectRatio = float(imgSize.x) / float(imgSize.y);
     float tanHalfFov = tan(radians(60.0) / 2.0);
@@ -210,29 +206,36 @@ void main() {
 
     vec4 color = vec4(0.0, 0.0, 0.0, 1.0); // Space
     
+    float prev_y; 
+
     uint steps = 0;
     while (steps < MAX_STEPS){
-
+        
         if (ray.r <= rad_s) {  // Just outside event horizon
-            color = vec4(0.0, 0.0, 1.0, 1.0);
+//            color = vec4(0.0, 0.0, 1.0, 1.0); // Black hole
             break;
         }
-        else if (check_planet(ray, planet_pos, planet_rad)) { // Planet at 1 AU with 10x Earth's radius
-            color = vec4(1.0, 0.0, 0.0, 1.0); // Planet color
+        if (check_planet(ray, planet1_pos, planet1_rad)) { // Planet
+            color = vec4(0.41, 0.69, 0.71, 1.0); 
             break;
-        }        
-        else if (ray.r > 1e30) { // Far distance
-//            color = vec4(0.0, 0.0, 0.1, 1.0);
+        }
+        if (check_planet(ray, planet2_pos, planet2_rad)) { // Planet
+            color = vec4(0.71, 0.41, 0.69, 1.0); 
+            break;
+        }
+        if (ray.y * prev_y < 0 && ray.r < rad_s * 3) { // Ecresion disk plane
+            color = vec4(0.83, 0.46, 0.03, 0.8); 
+            break;
+        }
+        if (ray.r > 1e30) { // Far distance
             break;
         }
 
-        ray = rk4_step(ray, ray.r * 0.01);
+        prev_y = ray.y;
+        ray = euler_step(ray, ray.r * 0.01);
 
         steps++;
     }
-
-    uint idx = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * COMPUTE_WIDTH;
-    rays[idx] = ray.r;
 
     imageStore(outputImage, pixel, color);
 }

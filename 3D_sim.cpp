@@ -293,27 +293,21 @@ struct Camera {
     vec3 target = vec3(0, 0, 0);  // Black hole position
     vec3 up = vec3(0, 1, 0);      // World up
 
+    vector<vec3> track;
     int numPoints;
-    vector<vec3> track = genTrack(3e4);
+    float y;
 
-    Camera(vec3 pos, vec3 dir, int circlePoints) : camPos(pos), numPoints(circlePoints) {
-        float camDis = 5e4;
-        camPos = vec3(camDis, 0.0, camDis);
-
-        // Calculate view direction
-        camFwd = normalize(target - camPos);
-        camRight = normalize(cross(camFwd, up));
-        camUp = cross(camRight, camFwd);        
+    Camera(float camRad, int circlePoints, float height) : numPoints(circlePoints), y(height) {
+        track = genTrack(camRad);
     }
 
     vector<vec3> genTrack(float camRad) {
-        vector<vec3> track;
         float angleStep = 2.0f * M_PI / numPoints;
         for (int i = 0; i < numPoints; i++) {
             float angle = i * angleStep;
             float x = camRad * cos(angle);
             float z = camRad * sin(angle);
-            track.push_back(vec3(x, 0.0f, z));
+            track.push_back(vec3(x, y, z));
         }
         return track;
     }
@@ -326,46 +320,22 @@ struct Camera {
     }
 };
 
-Camera cam(vec3(0, 0, 1e11), vec3(0, 0, -1), 1000);
+Camera cam(3e4, 1000, 1e4);
 
 int main() {
     int num_rays = engine.COMPUTE_HEIGHT * engine.COMPUTE_WIDTH;
 
     cout << "Initialized " << num_rays << " rays." << endl;
 	cout << ceil(num_rays / 16.0) << " work groups will be dispatched per frame." << endl;    
-
-    std::cout << "Starting Black Hole Simulator..." << std::endl;
-
-	float* rays = new float[num_rays]();
-
-    GLuint rayBuffer;
-
-    glGenBuffers(1, &rayBuffer);
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, rayBuffer);
-    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(float) * num_rays, rays, GL_DYNAMIC_DRAW);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, rayBuffer);
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    cout << "Starting Black Hole Simulator..." << endl;
 
     int frame = 0;
     while (!glfwWindowShouldClose(engine.window)) {
+        cam.rotateCam(frame);
         engine.renderScene(blackhole1.rad_s, cam.camPos, cam.camFwd, cam.camRight, cam.camUp);
 
         glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-        
-        glBindBuffer(GL_SHADER_STORAGE_BUFFER, rayBuffer);
-        float* mappedRays = (float*)glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_READ_ONLY);
 
-        int centerX = engine.COMPUTE_WIDTH / 2;
-        int centerY = engine.COMPUTE_HEIGHT / 2;
-        int centerIndex = centerY * engine.COMPUTE_WIDTH + centerX;
-
-        if (mappedRays) {
-            //cout << mappedRays[centerIndex] << endl;
-            glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
-        }
-        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-
-        cam.rotateCam(frame);
         frame++;
     }
     glDeleteProgram(engine.computeShader);
