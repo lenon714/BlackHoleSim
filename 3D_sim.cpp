@@ -29,8 +29,8 @@ struct Engine {
     GLFWwindow* window;
     int HEIGHT = 750;
     int WIDTH = 1000;
-    int COMPUTE_HEIGHT = 300;
-	int COMPUTE_WIDTH = 400;
+    int COMPUTE_HEIGHT = 150;
+	int COMPUTE_WIDTH = 200;
     double width = 1e11;
     double height = 7.5e10;
 
@@ -320,7 +320,7 @@ struct Camera {
     }
 };
 
-Camera cam(3e4, 1000, 1e4);
+Camera cam(3e4, 1000, -1e4);
 
 int main() {
     int num_rays = engine.COMPUTE_HEIGHT * engine.COMPUTE_WIDTH;

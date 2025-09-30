@@ -3,12 +3,12 @@
   "WorkspaceRootPath": "C:\\Users\\lenon\\Documents\\GitHub\\BlackHoleSim\\",
   "Documents": [
     {
-      "AbsoluteMoniker": "D:0:0:{A68FD4B3-17BA-4FEB-AC62-7D863B1D030E}|BlackHoleSim.vcxproj|C:\\Users\\lenon\\Documents\\GitHub\\BlackHoleSim\\geodesic.comp||{8B382828-6202-11D1-8870-0000F87579D2}",
-      "RelativeMoniker": "D:0:0:{A68FD4B3-17BA-4FEB-AC62-7D863B1D030E}|BlackHoleSim.vcxproj|solutionrelative:geodesic.comp||{8B382828-6202-11D1-8870-0000F87579D2}"
-    },
-    {
       "AbsoluteMoniker": "D:0:0:{A68FD4B3-17BA-4FEB-AC62-7D863B1D030E}|BlackHoleSim.vcxproj|C:\\Users\\lenon\\Documents\\GitHub\\BlackHoleSim\\3D_sim.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
       "RelativeMoniker": "D:0:0:{A68FD4B3-17BA-4FEB-AC62-7D863B1D030E}|BlackHoleSim.vcxproj|solutionrelative:3D_sim.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A68FD4B3-17BA-4FEB-AC62-7D863B1D030E}|BlackHoleSim.vcxproj|C:\\Users\\lenon\\Documents\\GitHub\\BlackHoleSim\\geodesic.comp||{8B382828-6202-11D1-8870-0000F87579D2}",
+      "RelativeMoniker": "D:0:0:{A68FD4B3-17BA-4FEB-AC62-7D863B1D030E}|BlackHoleSim.vcxproj|solutionrelative:geodesic.comp||{8B382828-6202-11D1-8870-0000F87579D2}"
     }
   ],
   "DocumentGroupContainers": [
@@ -18,33 +18,20 @@
       "DocumentGroups": [
         {
           "DockedWidth": 200,
-          "SelectedChildIndex": 0,
+          "SelectedChildIndex": 3,
           "Children": [
             {
               "$type": "Document",
-              "DocumentIndex": 0,
+              "DocumentIndex": 1,
               "Title": "geodesic.comp",
               "DocumentMoniker": "C:\\Users\\lenon\\Documents\\GitHub\\BlackHoleSim\\geodesic.comp",
               "RelativeDocumentMoniker": "geodesic.comp",
               "ToolTip": "C:\\Users\\lenon\\Documents\\GitHub\\BlackHoleSim\\geodesic.comp",
               "RelativeToolTip": "geodesic.comp",
-              "ViewState": "AgIAAFQAAAAAAAAAAAAAAFMAAAA+AAAAAAAAAA==",
+              "ViewState": "AgIAALoAAAAAAAAAAAAAAOsAAAAoAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001001|",
               "WhenOpened": "2025-09-29T20:25:16.228Z",
               "IsPinned": true,
-              "EditorCaption": ""
-            },
-            {
-              "$type": "Document",
-              "DocumentIndex": 1,
-              "Title": "3D_sim.cpp",
-              "DocumentMoniker": "C:\\Users\\lenon\\Documents\\GitHub\\BlackHoleSim\\3D_sim.cpp",
-              "RelativeDocumentMoniker": "3D_sim.cpp",
-              "ToolTip": "C:\\Users\\lenon\\Documents\\GitHub\\BlackHoleSim\\3D_sim.cpp",
-              "RelativeToolTip": "3D_sim.cpp",
-              "ViewState": "AgIAADUBAAAAAAAAAAAAAEQBAAAMAAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
-              "WhenOpened": "2025-09-29T20:25:16.762Z",
               "EditorCaption": ""
             },
             {
@@ -54,6 +41,19 @@
             {
               "$type": "Bookmark",
               "Name": "ST:0:0:{aa2115a1-9712-457b-9047-dbb71ca2cdd2}"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "3D_sim.cpp",
+              "DocumentMoniker": "C:\\Users\\lenon\\Documents\\GitHub\\BlackHoleSim\\3D_sim.cpp",
+              "RelativeDocumentMoniker": "3D_sim.cpp",
+              "ToolTip": "C:\\Users\\lenon\\Documents\\GitHub\\BlackHoleSim\\3D_sim.cpp",
+              "RelativeToolTip": "3D_sim.cpp",
+              "ViewState": "AgIAAAwAAAAAAAAAAAAiwB8AAAAcAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
+              "WhenOpened": "2025-09-29T20:25:16.762Z",
+              "EditorCaption": ""
             }
           ]
         }
