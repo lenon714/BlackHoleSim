@@ -320,7 +320,7 @@ struct Camera {
     }
 };
 
-Camera cam(3e4, 1000, -1e4);
+Camera cam(3e4, 500, -1e4);
 
 int main() {
     int num_rays = engine.COMPUTE_HEIGHT * engine.COMPUTE_WIDTH;
