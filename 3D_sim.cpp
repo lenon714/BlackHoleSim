@@ -1,4 +1,7 @@
-﻿#include <GL/glew.h>
+﻿#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb_image_write.h>
+
+#include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -15,6 +18,7 @@
 #include <fstream>
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
+
 #pragma comment(lib, "opengl32.lib")
 #endif
 using namespace glm;
@@ -27,10 +31,10 @@ const float EPSILON = 1e-10;
 
 struct Engine {
     GLFWwindow* window;
-    int HEIGHT = 750;
-    int WIDTH = 1000;
-    int COMPUTE_HEIGHT = 150;
-	int COMPUTE_WIDTH = 200;
+    int HEIGHT = 600;
+    int WIDTH = 900;
+    int COMPUTE_HEIGHT = 300;
+	int COMPUTE_WIDTH = 450;
     double width = 1e11;
     double height = 7.5e10;
 
@@ -240,6 +244,27 @@ struct Engine {
 
 		return computeProgram;
     }
+    void saveFrameToFile(const char* filename) {
+        // Read pixels from texture
+        std::vector<float> pixels(COMPUTE_WIDTH * COMPUTE_HEIGHT * 4);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, pixels.data());
+
+        // Convert float to unsigned char (0-255)
+        std::vector<unsigned char> pixels_byte(COMPUTE_WIDTH * COMPUTE_HEIGHT * 4);
+        for (int i = 0; i < COMPUTE_WIDTH * COMPUTE_HEIGHT * 4; i++) {
+            pixels_byte[i] = static_cast<unsigned char>(std::min(std::max(pixels[i] * 255.0f, 0.0f), 255.0f));
+        }
+
+        // Flip vertically (OpenGL stores bottom-to-top)
+        std::vector<unsigned char> flipped(COMPUTE_WIDTH * COMPUTE_HEIGHT * 4);
+        for (int y = 0; y < COMPUTE_HEIGHT; y++) {
+            memcpy(&flipped[y * COMPUTE_WIDTH * 4],
+                &pixels_byte[(COMPUTE_HEIGHT - 1 - y) * COMPUTE_WIDTH * 4],
+                COMPUTE_WIDTH * 4);
+        }
+        stbi_write_png(filename, COMPUTE_WIDTH, COMPUTE_HEIGHT, 4, flipped.data(), COMPUTE_WIDTH * 4);
+    }
 };
 
 Engine engine;
@@ -322,22 +347,106 @@ struct Camera {
 
 Camera cam(3e4, 500, -1e4);
 
+void createVideoFromFrames(const char* outputFilename = "output.mp4", int framerate = 30) {
+    cout << "\nConverting frames to video..." << endl;
+
+    // Build FFmpeg command
+    stringstream cmd;
+#ifdef _WIN32
+    cmd << "ffmpeg -y -framerate " << framerate
+        << " -i frames/frame_%05d.png -c:v libx264 -pix_fmt yuv420p -crf 18 "
+        << outputFilename << " 2>&1";
+#else
+    cmd << "ffmpeg -y -framerate " << framerate
+        << " -i frames/frame_%05d.png -c:v libx264 -pix_fmt yuv420p -crf 18 "
+        << outputFilename << " 2>&1";
+#endif
+
+    int result = system(cmd.str().c_str());
+
+    if (result == 0) {
+        cout << "Video created successfully: " << outputFilename << endl;
+
+        // Optionally delete frames to save space
+        cout << "Delete frame files? (y/n): ";
+        char response;
+        cin >> response;
+        if (response == 'y' || response == 'Y') {
+#ifdef _WIN32
+            system("rmdir /s /q frames");
+#else
+            system("rm -rf frames");
+#endif
+            cout << "Frames deleted." << endl;
+        }
+    }
+    else {
+        cout << "FFmpeg conversion failed. Frames saved in 'frames' directory." << endl;
+        cout << "Make sure FFmpeg is installed and in your PATH." << endl;
+    }
+}
+
 int main() {
     int num_rays = engine.COMPUTE_HEIGHT * engine.COMPUTE_WIDTH;
 
     cout << "Initialized " << num_rays << " rays." << endl;
-	cout << ceil(num_rays / 16.0) << " work groups will be dispatched per frame." << endl;    
     cout << "Starting Black Hole Simulator..." << endl;
 
+    // Render settings
+    const int TOTAL_FRAMES = 500; // 500 frames for full camera rotation
+    const bool RENDER_TO_VIDEO = true; // Toggle video rendering
+
+    // Create output directory
+    #ifdef _WIN32
+        system("mkdir frames 2>nul");
+    #else
+        system("mkdir -p frames");
+    #endif
+
     int frame = 0;
-    while (!glfwWindowShouldClose(engine.window)) {
+    auto startTime = Clock::now();
+
+    while (frame < TOTAL_FRAMES) {
         cam.rotateCam(frame);
         engine.renderScene(blackhole1.rad_s, cam.camPos, cam.camFwd, cam.camRight, cam.camUp);
 
-        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+        if (RENDER_TO_VIDEO) {
+            // Save frame to file
+            char filename[256];
+            sprintf_s(filename, "frames/frame_%05d.png", frame);
+            engine.saveFrameToFile(filename);
 
+            // Progress update
+            if (frame % 10 == 0) {
+                auto currentTime = Clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(currentTime - startTime).count();
+                float fps = (frame + 1) / (float)elapsed;
+                float eta = (TOTAL_FRAMES - frame) / fps;
+                cout << "Frame " << frame << "/" << TOTAL_FRAMES
+                    << " (" << fps << " fps, ETA: " << eta << "s)" << endl;
+            }
+        }
+        else {
+            // Real-time preview
+            glfwSwapBuffers(engine.window);
+            glfwPollEvents();
+
+            if (glfwWindowShouldClose(engine.window)) break;
+        }
+
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
         frame++;
     }
+
+    if (RENDER_TO_VIDEO) {
+        auto totalTime = std::chrono::duration_cast<std::chrono::seconds>(
+            Clock::now() - startTime).count();
+        cout << "\nRendering complete! Total time: " << totalTime << "s" << endl;
+
+        // Automatically create video
+        createVideoFromFrames("blackhole_simulation.mp4", 30);
+    }
+
     glDeleteProgram(engine.computeShader);
     glfwTerminate();
 
